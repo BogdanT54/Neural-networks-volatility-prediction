@@ -2,6 +2,12 @@
 data_raw/
 artifacts/
 
+# fisiere de date procesate care pot aparea accidental in radacina proiectului
+*.pkl
+*.csv
+*.pt
+*.pth
+
 # Python
 __pycache__/
 *.py[cod]
@@ -14,3 +20,6 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+
+# OS
+Thumbs.db

@@ -29,10 +29,51 @@ def setup_logging(verbose: bool = False) -> None:
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 
+def _export_csv(panel, feats, out_dir, log) -> None:
+    """Exporta CSV-uri inspectabile in artifacts/processed/export/."""
+    import numpy as np
+
+    export_dir = out_dir / "export"
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Panel complet dupa curatare + ffill
+    panel_path = export_dir / "panel_preprocessed.csv"
+    panel.to_csv(panel_path, index=False, date_format="%Y-%m-%d")
+    log.info("  Exportat: %s (%d randuri)", panel_path.name, len(panel))
+
+    # 2. Features complete (toate simbolurile)
+    feats_path = export_dir / "features_all.csv"
+    feats.to_csv(feats_path, index=False, date_format="%Y-%m-%d", float_format="%.6f")
+    log.info("  Exportat: %s (%d randuri)", feats_path.name, len(feats))
+
+    # 3. Sample per simbol: primele si ultimele 5 randuri din fiecare simbol,
+    #    util pentru a vedea rapid efectul ffill la capetele seriei
+    sample_parts = []
+    for sym, g in feats.groupby("Symbol"):
+        sample_parts.append(g.head(5))
+        sample_parts.append(g.tail(5))
+    import pandas as pd
+    sample = pd.concat(sample_parts).sort_values(["Symbol", "Date"])
+    sample_path = export_dir / "features_sample_per_symbol.csv"
+    sample.to_csv(sample_path, index=False, date_format="%Y-%m-%d", float_format="%.6f")
+    log.info("  Exportat: %s (%d randuri, cap+coada per simbol)", sample_path.name, len(sample))
+
+    # 4. Statistici descriptive per simbol
+    from nyse_vol.data.features import FEATURE_COLS, TARGET_COLS
+    stats = feats.groupby("Symbol")[FEATURE_COLS + TARGET_COLS].describe().round(4)
+    stats_path = export_dir / "features_stats_per_symbol.csv"
+    stats.to_csv(stats_path)
+    log.info("  Exportat: %s (statistici descriptive per simbol)", stats_path.name)
+
+    log.info("Toate fisierele exportate in: %s", export_dir)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true", help="reconstruieste cache-ul")
     ap.add_argument("--verbose", action="store_true", help="afiseaza log-uri DEBUG")
+    ap.add_argument("--export", action="store_true",
+                    help="salveaza CSV-uri inspectabile in artifacts/processed/export/")
     args = ap.parse_args()
 
     setup_logging(verbose=args.verbose)
@@ -56,6 +97,11 @@ def main():
     feats = get_features(force=args.force)
     log.info("Features finale: %d randuri dupa eliminarea NaN.", len(feats))
     log.info("Salvat in: %s", config.PROCESSED_DIR)
+
+    if args.export:
+        log.info("--- Export CSV-uri inspectabile ---")
+        _export_csv(panel, feats, config.PROCESSED_DIR, log)
+
     log.info("=== Preprocesare completa ===")
 
 
