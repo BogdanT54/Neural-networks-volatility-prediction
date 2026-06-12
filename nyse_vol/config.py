@@ -26,6 +26,9 @@ PROCESSED_DIR = ARTIFACTS_DIR / "processed"
 MODELS_DIR = ARTIFACTS_DIR / "models"
 PLOTS_DIR = ARTIFACTS_DIR / "plots"
 METRICS_DIR = ARTIFACTS_DIR / "metrics"
+# Directorul scriibil unde se genereaza datele sintetice cand DATA_DIR nu contine
+# date reale (DATA_DIR poate fi read-only, ex. /kaggle/input/...).
+SAMPLE_DIR = ARTIFACTS_DIR / "sample_data"
 
 for _d in (ARTIFACTS_DIR, PROCESSED_DIR, MODELS_DIR, PLOTS_DIR, METRICS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
