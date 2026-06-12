@@ -8,6 +8,7 @@ partitia de train.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -18,6 +19,8 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from nyse_vol import config
 from nyse_vol.data.features import FEATURE_COLS, TARGET_COLS
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,15 +65,27 @@ def build_splits(feat_df: pd.DataFrame, window: int | None = None) -> Splits:
     train_end = pd.Timestamp(config.TRAIN_END)
     val_end = pd.Timestamp(config.VAL_END)
 
+    logger.info("=== Construire split-uri (fereastra=%d zile) ===", window)
+    logger.info("Granita train/val: %s | Granita val/test: %s",
+                config.TRAIN_END, config.VAL_END)
+
     X_parts, y_parts, meta_parts = [], [], []
-    for _, g in feat_df.groupby("Symbol"):
+    skipped_symbols = []
+    for sym, g in feat_df.groupby("Symbol"):
         res = _windows_for_symbol(g, window)
         if res is None:
+            logger.warning("  [%s] Sari peste: mai putine zile (%d) decat fereastra (%d).",
+                           sym, len(g), window)
+            skipped_symbols.append(sym)
             continue
         X, y, meta = res
+        logger.debug("  [%s] %d ferestre generate din %d zile.", sym, len(X), len(g))
         X_parts.append(X)
         y_parts.append(y)
         meta_parts.append(meta)
+
+    if skipped_symbols:
+        logger.warning("Simboluri sarite (date insuficiente): %s", skipped_symbols)
 
     X = np.concatenate(X_parts)
     y = np.concatenate(y_parts)
@@ -81,10 +96,21 @@ def build_splits(feat_df: pd.DataFrame, window: int | None = None) -> Splits:
     val_mask = (end_dates > np.datetime64(train_end)) & (end_dates <= np.datetime64(val_end))
     test_mask = end_dates > np.datetime64(val_end)
 
+    logger.info(
+        "Split dimensiuni: train=%d | val=%d | test=%d ferestre",
+        train_mask.sum(), val_mask.sum(), test_mask.sum()
+    )
+
     # --- scalare trasaturi (fit doar pe train) ---
     n_feat = X.shape[-1]
     scaler = StandardScaler()
     scaler.fit(X[train_mask].reshape(-1, n_feat))
+    logger.info(
+        "StandardScaler fit pe train: medie features=[%.4f, %.4f, ...], "
+        "std=[%.4f, %.4f, ...]",
+        scaler.mean_[0], scaler.mean_[1],
+        scaler.scale_[0], scaler.scale_[1]
+    )
 
     def scale_X(arr):
         flat = arr.reshape(-1, n_feat)
@@ -93,11 +119,16 @@ def build_splits(feat_df: pd.DataFrame, window: int | None = None) -> Splits:
     # --- standardizare tinte (fit doar pe train) ---
     t_mean = y[train_mask].mean(axis=0)
     t_std = y[train_mask].std(axis=0) + 1e-8
+    logger.info(
+        "Normalizare tinte (fit pe train): medie=%s | std=%s",
+        np.round(t_mean, 4), np.round(t_std, 4)
+    )
 
     def scale_y(arr):
         return ((arr - t_mean) / t_std).astype(np.float32)
 
     to_t = lambda a: torch.from_numpy(a)
+    logger.info("Split-uri construite cu succes.")
     return Splits(
         X_train=to_t(scale_X(X[train_mask])), y_train=to_t(scale_y(y[train_mask])),
         X_val=to_t(scale_X(X[val_mask])), y_val=to_t(scale_y(y[val_mask])),

@@ -12,11 +12,15 @@ fiecare orizont din config.HORIZONS, in scara logaritmica (mai stabila).
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from nyse_vol import config
 from nyse_vol.data import volatility as vol
+
+logger = logging.getLogger(__name__)
 
 # coloanele de trasaturi produse (in afara de eventuale extra)
 FEATURE_COLS = [
@@ -57,14 +61,42 @@ def _per_symbol_features(g: pd.DataFrame) -> pd.DataFrame:
 
 def build_features(panel: pd.DataFrame) -> pd.DataFrame:
     """Aplica calculul de trasaturi si tinte pe fiecare simbol din panel."""
+    symbols = panel["Symbol"].unique()
+    logger.info("=== Construire features ===")
+    logger.info("Procesez %d simboluri...", len(symbols))
+
     parts = []
     for sym, g in panel.groupby("Symbol"):
+        n_rows = len(g)
+        logger.debug("  [%s] %d zile de date OHLCV", sym, n_rows)
         gf = _per_symbol_features(g)
         gf["Symbol"] = sym
         parts.append(gf)
+
     out = pd.concat(parts, ignore_index=True)
+    n_before = len(out)
     target_cols = [f"target_h{h}" for h in config.HORIZONS]
-    out = out.dropna(subset=FEATURE_COLS + target_cols).reset_index(drop=True)
+    all_required = FEATURE_COLS + target_cols
+
+    # raporteaza NaN-urile per coloana inainte de eliminare
+    nan_counts = out[all_required].isna().sum()
+    nan_cols = nan_counts[nan_counts > 0]
+    if not nan_cols.empty:
+        logger.warning(
+            "  Randuri cu valori lipsa eliminate dupa calculul features:\n%s",
+            "\n".join(f"    {col}: {cnt} NaN" for col, cnt in nan_cols.items())
+        )
+
+    out = out.dropna(subset=all_required).reset_index(drop=True)
+    n_after = len(out)
+    logger.info(
+        "Features finale: %d randuri (eliminate %d cu NaN din %d total).",
+        n_after, n_before - n_after, n_before
+    )
+    logger.info(
+        "Acoperire per simbol dupa dropna:\n%s",
+        out.groupby("Symbol").size().to_string()
+    )
     return out
 
 

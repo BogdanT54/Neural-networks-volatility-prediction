@@ -59,6 +59,11 @@ WINDOW = 60
 # Numar minim de observatii valide pe simbol pentru a fi inclus.
 MIN_OBS_PER_SYMBOL = 250
 
+# Numar maxim de zile consecutive lipsa per simbol pentru care se aplica
+# forward-fill. Goluri mai lungi indica suspendare reala sau lipsa de date
+# si randul este eliminat in loc sa fie imputat.
+MAX_FFILL_DAYS = 3
+
 # Numar de zile de tranzactionare intr-un an (pentru anualizare optionala).
 TRADING_DAYS = 252
 
