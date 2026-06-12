@@ -1,0 +1,16 @@
+# date brute si artefacte generate (nu se comit)
+data_raw/
+artifacts/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
