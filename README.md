@@ -1,1 +1,1 @@
-# Neural-networks-price-prediction
+# Neural-networks-volatility-prediction
