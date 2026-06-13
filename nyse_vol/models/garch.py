@@ -165,3 +165,48 @@ def garch_forecast_panel(panel: pd.DataFrame, test_start: str,
             rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+def garch_model_stats(panel: pd.DataFrame, train_end: str,
+                      order=(1, 1), dist: str = "normal") -> dict:
+    """AIC, BIC, Log-Likelihood in-sample pe datele de train+val, per simbol.
+
+    Fitam GARCH o singura data pe toata fereastra istorica (pana la train_end)
+    si returnam mediile metricilor de fit pentru compararea formala a ordinelor.
+    Aceste metrici masoara cat de bine modelul explica volatilitatea in-sample,
+    spre deosebire de RMSE/MAE/QLIKE care masoara calitatea predictiei out-of-sample.
+
+    Note
+    ----
+    AIC  = -2 * LogLik + 2 * k          (mai mic = mai bun, penalizeaza complexitatea)
+    BIC  = -2 * LogLik + k * log(n)     (penalizeaza mai mult parametrii in plus)
+    Valorile sunt medii peste toate simbolurile din panel.
+    """
+    if not _HAS_ARCH:
+        raise ImportError("Pachetul `arch` nu este instalat.")
+
+    train_end_ts = pd.Timestamp(train_end)
+    p, q = order
+    aic_vals, bic_vals, loglik_vals = [], [], []
+
+    for sym, g in panel.groupby("Symbol"):
+        g = g.sort_values("Date")
+        hist = g[g["Date"] <= train_end_ts]
+        ret = (np.log(hist["Close"] / hist["Close"].shift(1)).dropna() * 100.0)
+        if len(ret) < 100:
+            continue
+        try:
+            res = _fit(ret, p, q, dist)
+            aic_vals.append(res.aic)
+            bic_vals.append(res.bic)
+            loglik_vals.append(res.loglikelihood)
+        except Exception:
+            continue
+
+    if not aic_vals:
+        return {"aic": float("nan"), "bic": float("nan"), "loglik": float("nan")}
+    return {
+        "aic":    float(np.mean(aic_vals)),
+        "bic":    float(np.mean(bic_vals)),
+        "loglik": float(np.mean(loglik_vals)),
+    }

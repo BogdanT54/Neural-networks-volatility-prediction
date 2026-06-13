@@ -15,7 +15,20 @@ import pandas as pd
 
 from _common import config, get_features, get_panel, print_banner, print_data_summary, set_seed
 from nyse_vol.data.features import TARGET_COLS
-from nyse_vol.models.garch import garch_forecast_panel, stationarity_tests
+from nyse_vol.models.garch import garch_forecast_panel, garch_model_stats, stationarity_tests
+
+
+def _qlike(true_vol: np.ndarray, pred_vol: np.ndarray) -> float:
+    """QLIKE: pierdere asimetrica specifica volatilitatii.
+
+    Penalizeaza SUBESTIMAREA mai mult decat supraestimarea — important in
+    managementul riscului (e mai periculos sa crezi ca piata e calma cand nu e).
+    Formula: mean(σ²_real / ĥ² + log(ĥ²))
+    """
+    eps = 1e-8
+    h2 = np.maximum(pred_vol, eps) ** 2
+    s2 = true_vol ** 2
+    return float(np.mean(s2 / h2 + np.log(h2)))
 
 
 def _true_targets(feats: pd.DataFrame) -> pd.DataFrame:
@@ -90,7 +103,6 @@ def _print_stationarity(results: dict) -> None:
     print(f"\n  Interpretare:")
     print("    ADF  : H0=nestationar.  p<0.05 → respingem H0 → STATIONARA")
     print("    KPSS : H0=stationara.   p>=0.05 → nu respingem H0 → STATIONARA")
-    print("           (p trunchiat la [0.01, 0.10] in statsmodels — >0.10 = foarte stationar)")
     print("    PP   : H0=nestationar.  p<0.05 → respingem H0 → STATIONARA")
     print(f"{sep}\n")
 
@@ -157,9 +169,14 @@ def main():
     # ── Cautare configuratie optima GARCH ──
     print(f"Testez {len(combos)} configuratii GARCH pe {len(all_syms)} stocuri...\n")
     print(f"  GARCH = walk-forward per stoc: fit pe date istorice, forecast pe test.")
-    print(f"  Cel mai bun config (RMSE h=1 agregat) → salvat in garch_forecasts.pkl.\n")
-    print(f"  {'Configuratie':<22}  {'RMSE(h=1)':>10}  {'Puncte test':>12}")
-    print(f"  {'─' * 22}  {'─' * 10}  {'─' * 12}")
+    print(f"  Metrici out-of-sample (test): RMSE, MAE, QLIKE")
+    print(f"  Metrici in-sample (train+val): AIC, BIC  (medie per simbol)")
+    print(f"  Cel mai bun config ales dupa RMSE(h=1) → salvat in garch_forecasts.pkl.\n")
+
+    hdr = (f"  {'Configuratie':<22}  {'RMSE':>8}  {'MAE':>8}  {'QLIKE':>8}"
+           f"  {'Avg AIC':>9}  {'Avg BIC':>9}")
+    print(hdr)
+    print(f"  {'─' * 22}  {'─' * 8}  {'─' * 8}  {'─' * 8}  {'─' * 9}  {'─' * 9}")
 
     best = None
     for order, dist in combos:
@@ -167,15 +184,26 @@ def main():
         fc = garch_forecast_panel(panel, config.VAL_END, order=order, dist=dist,
                                   refit_every=args.refit_every)
         if fc.empty:
-            print(f"  {label:<22}  {'—':>10}  niciun forecast valid")
+            print(f"  {label:<22}  {'—':>8}  niciun forecast valid")
             continue
+
         merged = truth.merge(fc, on=["Symbol", "Date"], how="inner")
-        err = np.sqrt(np.mean((merged["true_vol_h1"] - merged["vol_garch_h1"]) ** 2))
+        tv  = merged["true_vol_h1"].to_numpy()
+        pv  = merged["vol_garch_h1"].to_numpy()
+        rmse  = float(np.sqrt(np.mean((tv - pv) ** 2)))
+        mae   = float(np.mean(np.abs(tv - pv)))
+        ql    = _qlike(tv, pv)
         n_pts = len(merged)
-        marker = "  ← cel mai bun" if (best is None or err < best[0]) else ""
-        print(f"  {label:<22}  {err:>10.5f}  {n_pts:>12,}{marker}")
-        if best is None or err < best[0]:
-            best = (err, order, dist, fc)
+
+        # metrici in-sample (AIC/BIC) — fit o singura data pe train+val
+        ms = garch_model_stats(panel, config.VAL_END, order=order, dist=dist)
+
+        marker = "  ← cel mai bun" if (best is None or rmse < best[0]) else ""
+        print(f"  {label:<22}  {rmse:>8.5f}  {mae:>8.5f}  {ql:>8.4f}"
+              f"  {ms['aic']:>9.1f}  {ms['bic']:>9.1f}{marker}")
+
+        if best is None or rmse < best[0]:
+            best = (rmse, order, dist, fc)
 
     if best is None:
         raise SystemExit("Niciun forecast GARCH valid.")
