@@ -27,13 +27,35 @@ def _true_targets(feats: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=TARGET_COLS)
 
 
+def _fmt_p(p: float, test: str = "adf") -> str:
+    """Formateaza p-value cu notatii speciale pentru margini."""
+    if test == "kpss":
+        # statsmodels KPSS truncheaza p la intervalul [0.01, 0.10]
+        if p >= 0.10:
+            return " >0.10"
+        if p <= 0.01:
+            return " <0.01"
+        return f"{p:>6.4f}"
+    # ADF si PP: p-valori reale, pot fi extrem de mici
+    if p < 0.0001:
+        return "<.0001"
+    return f"{p:>6.4f}"
+
+
 def _print_stationarity(results: dict) -> None:
-    """Afiseaza tabelul cu rezultatele testelor de stationaritate."""
-    sep = "─" * 68
+    """Afiseaza tabelul cu rezultatele testelor de stationaritate.
+
+    KPSS: H0 = stationara (nivel constant). p >= 0.05 → stationara (nu respingem H0).
+          p-value trunchiat la [0.01, 0.10] in statsmodels — afisat ca >0.10 / <0.01.
+    ADF:  H0 = nestationar. p < 0.05 → stationara.
+    PP:   H0 = nestationar. p < 0.05 → stationara.
+    """
+    n = len(results)
+    sep = "─" * 72
     print(f"\n{sep}")
-    print("  TESTE DE STATIONARITATE PE LOG-RANDAMENTE")
-    print(f"  {'Stoc':<7}  {'ADF stat':>9}  {'p-ADF':>7}  {'KPSS stat':>9}  "
-          f"{'p-KPSS':>7}  {'PP stat':>9}  {'p-PP':>7}  Concluzie")
+    print(f"  TESTE DE STATIONARITATE PE LOG-RANDAMENTE ({n} stocuri)")
+    print(f"  {'Stoc':<7}  {'ADF stat':>9}  {'p-ADF':>6}  {'KPSS stat':>9}  "
+          f"{'p-KPSS':>6}  {'PP stat':>9}  {'p-PP':>6}  Verdict")
     print(sep)
 
     all_stationary = True
@@ -42,9 +64,12 @@ def _print_stationarity(results: dict) -> None:
         kpss = r.get("kpss")
         pp   = r.get("pp")
 
-        adf_str  = f"{adf['stat']:>9.3f}  {adf['p']:>7.4f}" if adf else f"{'N/A':>9}  {'N/A':>7}"
-        kpss_str = f"{kpss['stat']:>9.3f}  {kpss['p']:>7.4f}" if kpss else f"{'N/A':>9}  {'N/A':>7}"
-        pp_str   = f"{pp['stat']:>9.3f}  {pp['p']:>7.4f}"    if pp   else f"{'N/A':>9}  {'N/A':>7}"
+        adf_str  = (f"{adf['stat']:>9.3f}  {_fmt_p(adf['p'], 'adf'):>6}"
+                    if adf else f"{'N/A':>9}  {'N/A':>6}")
+        kpss_str = (f"{kpss['stat']:>9.3f}  {_fmt_p(kpss['p'], 'kpss'):>6}"
+                    if kpss else f"{'N/A':>9}  {'N/A':>6}")
+        pp_str   = (f"{pp['stat']:>9.3f}  {_fmt_p(pp['p'], 'pp'):>6}"
+                    if pp else f"{'N/A':>9}  {'N/A':>6}")
 
         adf_ok  = adf["stationary"]  if adf  else True
         kpss_ok = kpss["stationary"] if kpss else True
@@ -53,23 +78,21 @@ def _print_stationarity(results: dict) -> None:
         is_ok = adf_ok and kpss_ok and pp_ok
         if not is_ok:
             all_stationary = False
-        concl = "STATIONARA ✓" if is_ok else "ATENTIE ⚠"
+        verdict = "STATIONARA ✓" if is_ok else "ATENTIE ⚠"
 
-        print(f"  {sym:<7}  {adf_str}  {kpss_str}  {pp_str}  {concl}")
+        print(f"  {sym:<7}  {adf_str}  {kpss_str}  {pp_str}  {verdict}")
 
     print(sep)
     if all_stationary:
-        print("  Concluzie globala: toate seriile sunt STATIONARE.")
-        print("  GARCH este aplicabil direct pe log-randamente (fara diferentiere).")
+        print("  Concluzie: TOATE seriile sunt STATIONARE — GARCH aplicabil direct.")
     else:
         print("  ATENTIE: unele serii pot necesita diferentiere suplimentara.")
+    print(f"\n  Interpretare:")
+    print("    ADF  : H0=nestationar.  p<0.05 → respingem H0 → STATIONARA")
+    print("    KPSS : H0=stationara.   p>=0.05 → nu respingem H0 → STATIONARA")
+    print("           (p trunchiat la [0.01, 0.10] in statsmodels — >0.10 = foarte stationar)")
+    print("    PP   : H0=nestationar.  p<0.05 → respingem H0 → STATIONARA")
     print(f"{sep}\n")
-
-    print("  Interpretare teste:")
-    print("    ADF   : H0 = nestationar.  p < 0.05 → respingem H0 → STATIONARA")
-    print("    KPSS  : H0 = stationara.   p < 0.05 → respingem H0 → NESTATIONARA")
-    print("    PP    : H0 = nestationar.  p < 0.05 → respingem H0 → STATIONARA")
-    print("  Log-randamentele sunt aproape intotdeauna stationare — confirmat.")
 
 
 def main():
@@ -122,13 +145,19 @@ def main():
           f"({n_test_days} zile bursiere × {n_test_sym} stocuri = "
           f"{len(feats_test):,} puncte de evaluat)")
 
+    all_syms = sorted(panel["Symbol"].unique().tolist())
+    print(f"\n  Stocuri in panel ({len(all_syms)}): {', '.join(all_syms)}")
+    print(f"  Teste de stationaritate + GARCH se aplica pe FIECARE stoc.")
+
     # ── Teste de stationaritate ──
     print("\nTestez stationaritatea log-randamentelor per simbol...")
     stat_results = stationarity_tests(panel)
     _print_stationarity(stat_results)
 
     # ── Cautare configuratie optima GARCH ──
-    print(f"Testez {len(combos)} configuratii GARCH...\n")
+    print(f"Testez {len(combos)} configuratii GARCH pe {len(all_syms)} stocuri...\n")
+    print(f"  GARCH = walk-forward per stoc: fit pe date istorice, forecast pe test.")
+    print(f"  Cel mai bun config (RMSE h=1 agregat) → salvat in garch_forecasts.pkl.\n")
     print(f"  {'Configuratie':<22}  {'RMSE(h=1)':>10}  {'Puncte test':>12}")
     print(f"  {'─' * 22}  {'─' * 10}  {'─' * 12}")
 
@@ -156,10 +185,14 @@ def main():
     with open(config.METRICS_DIR / "garch_best.txt", "w") as f:
         f.write(f"order={order} dist={dist}\n")
 
+    n_syms_saved = fc["Symbol"].nunique()
+    n_rows_saved = len(fc)
     print(f"\n{'=' * 62}")
-    print(f"  Configuratia optima GARCH: order={order}  dist={dist}")
-    print(f"  Forecasturi salvate: {config.METRICS_DIR / 'garch_forecasts.pkl'}")
+    print(f"  Configuratia optima: GARCH{order}  dist={dist}")
+    print(f"  Forecasturi salvate pentru {n_syms_saved} stocuri ({n_rows_saved:,} zile-stoc)")
+    print(f"  Fisier: {config.METRICS_DIR / 'garch_forecasts.pkl'}")
     print(f"  Coloane: vol_garch_h1, vol_garch_h5, vol_garch_h10, vol_garch_h20")
+    print(f"  Folosit in: 05_evaluate_compare.py + 06_select_and_plot.py")
     print(f"{'=' * 62}")
 
 

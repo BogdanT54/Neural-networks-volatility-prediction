@@ -36,7 +36,9 @@ class Splits:
     feature_scaler: StandardScaler
     target_mean: np.ndarray
     target_std: np.ndarray
-    meta_test: pd.DataFrame  # Symbol + Date pentru ultima zi a fiecarei ferestre din test
+    meta_train: pd.DataFrame  # Symbol + Date pentru ultima zi a fiecarei ferestre din train
+    meta_val: pd.DataFrame    # Symbol + Date pentru ultima zi a fiecarei ferestre din val
+    meta_test: pd.DataFrame   # Symbol + Date pentru ultima zi a fiecarei ferestre din test
 
 
 def _windows_for_symbol(g: pd.DataFrame, window: int):
@@ -134,6 +136,8 @@ def build_splits(feat_df: pd.DataFrame, window: int | None = None) -> Splits:
         X_val=to_t(scale_X(X[val_mask])), y_val=to_t(scale_y(y[val_mask])),
         X_test=to_t(scale_X(X[test_mask])), y_test=to_t(scale_y(y[test_mask])),
         feature_scaler=scaler, target_mean=t_mean, target_std=t_std,
+        meta_train=meta[train_mask].reset_index(drop=True),
+        meta_val=meta[val_mask].reset_index(drop=True),
         meta_test=meta[test_mask].reset_index(drop=True),
     )
 
