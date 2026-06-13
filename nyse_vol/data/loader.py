@@ -49,15 +49,12 @@ def _read_daily_csv(raw: bytes, date: pd.Timestamp) -> pd.DataFrame:
 
 def load_year_dir(year_dir: Path, symbols: set[str] | None = None) -> pd.DataFrame:
     """Incarca toate zilele dintr-un director de an, optional filtrand pe simboluri."""
-    logger.info("Procesez directorul: %s", year_dir.name)
     csv_files = sorted(f for f in year_dir.iterdir() if _DATE_RE.search(f.name))
-    logger.info("  Gasit %d fisiere zilnice in director.", len(csv_files))
     frames = []
     skipped = 0
     for csv_file in csv_files:
         m = _DATE_RE.search(csv_file.name)
         date = pd.to_datetime(m.group(1), format="%Y%m%d")
-        logger.debug("  Citesc: %s (%s)", csv_file.name, date.date())
         try:
             df = _read_daily_csv(csv_file.read_bytes(), date)
         except Exception as exc:
@@ -65,11 +62,7 @@ def load_year_dir(year_dir: Path, symbols: set[str] | None = None) -> pd.DataFra
             skipped += 1
             continue
         if symbols is not None:
-            before = len(df)
             df = df[df["Symbol"].isin(symbols)]
-            dropped = before - len(df)
-            if dropped:
-                logger.debug("  [%s] %d simboluri filtrate.", date.date(), dropped)
         frames.append(df)
     if skipped:
         logger.warning("  %d fisiere zilnice sarite din cauza erorilor.", skipped)
@@ -77,24 +70,19 @@ def load_year_dir(year_dir: Path, symbols: set[str] | None = None) -> pd.DataFra
         logger.warning("  Niciun fisier valid gasit in %s.", year_dir.name)
         return pd.DataFrame(columns=_COLS)
     result = pd.concat(frames, ignore_index=True)
-    logger.info("  => %d randuri incarcate din %s", len(result), year_dir.name)
+    logger.info("  %s: %d zile, %d randuri", year_dir.name, len(csv_files), len(result))
     return result
 
 
 def load_year(zip_path: Path, symbols: set[str] | None = None) -> pd.DataFrame:
     """Incarca toate zilele dintr-un zip de an, optional filtrand pe simboluri."""
-    logger.info("Procesez fisierul: %s", zip_path.name)
     frames = []
     skipped = 0
     with zipfile.ZipFile(zip_path) as zf:
-        all_names = zf.namelist()
-        csv_names = [n for n in all_names if _DATE_RE.search(n)]
-        logger.info("  Gasit %d fisiere zilnice in arhiva (total intrari: %d)",
-                    len(csv_names), len(all_names))
+        csv_names = [n for n in zf.namelist() if _DATE_RE.search(n)]
         for name in csv_names:
             m = _DATE_RE.search(name)
             date = pd.to_datetime(m.group(1), format="%Y%m%d")
-            logger.debug("  Citesc: %s (%s)", name, date.date())
             try:
                 df = _read_daily_csv(zf.read(name), date)
             except Exception as exc:
@@ -102,11 +90,7 @@ def load_year(zip_path: Path, symbols: set[str] | None = None) -> pd.DataFrame:
                 skipped += 1
                 continue
             if symbols is not None:
-                before = len(df)
                 df = df[df["Symbol"].isin(symbols)]
-                dropped = before - len(df)
-                if dropped:
-                    logger.debug("  [%s] %d simboluri filtrate.", date.date(), dropped)
             frames.append(df)
     if skipped:
         logger.warning("  %d fisiere zilnice sarite din cauza erorilor.", skipped)
@@ -114,7 +98,7 @@ def load_year(zip_path: Path, symbols: set[str] | None = None) -> pd.DataFrame:
         logger.warning("  Niciun fisier valid gasit in %s.", zip_path.name)
         return pd.DataFrame(columns=_COLS)
     result = pd.concat(frames, ignore_index=True)
-    logger.info("  => %d randuri incarcate din %s", len(result), zip_path.name)
+    logger.info("  %s: %d zile, %d randuri", zip_path.stem, len(csv_names), len(result))
     return result
 
 
@@ -149,15 +133,9 @@ def _reindex_and_ffill(panel: pd.DataFrame, max_ffill: int) -> pd.DataFrame:
         n_filled = n_missing - n_still_nan
         n_dropped = n_still_nan
 
-        if n_missing > 0:
-            logger.warning(
-                "  [%s] %d zile lipsa din calendar: "
-                "%d umplute cu forward-fill (gap <= %d zile), "
-                "%d eliminate (gap prea lung).",
-                sym, n_missing, n_filled, max_ffill, n_dropped
-            )
-        else:
-            logger.debug("  [%s] Serie completa, nicio zi lipsa.", sym)
+        if n_dropped > 0:
+            logger.debug("  [%s] %d zile lipsa: %d ffill, %d eliminate (gap > %d).",
+                         sym, n_missing, n_filled, n_dropped, max_ffill)
 
         g_filled["Symbol"] = sym
         g_filled = (g_filled.dropna(subset=ohlcv_cols)
@@ -182,40 +160,20 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
     nan_mask = df[["Open", "High", "Low", "Close"]].isna().any(axis=1)
-    n_nan = nan_mask.sum()
-    if n_nan:
-        top_nan = (df[nan_mask].groupby("Symbol").size()
-                   .sort_values(ascending=False).head(5))
-        logger.warning(
-            "  Valori lipsa (NaN) in coloanele OHLC: %d randuri eliminate.\n"
-            "  Top simboluri afectate: %s",
-            n_nan, top_nan.to_dict()
-        )
     df = df[~nan_mask]
 
     neg_mask = ~(df[["Open", "High", "Low", "Close"]] > 0).all(axis=1)
-    n_neg = neg_mask.sum()
-    if n_neg:
-        logger.warning("  Preturi <= 0: %d randuri eliminate.", n_neg)
     df = df[~neg_mask]
 
     flat = df["High"] == df["Low"]
     zero_vol = df["Volume"] <= 0
-    n_flat = flat.sum()
-    n_zvol = (~flat & zero_vol).sum()
-    if n_flat:
-        logger.warning(
-            "  Zile nelichide (High=Low): %d randuri eliminate "
-            "(log-range=0 ar strica estimatorii de volatilitate).", n_flat
-        )
-    if n_zvol:
-        logger.warning("  Volum zero (cu range valid): %d randuri eliminate.", n_zvol)
-
     df = df[~flat & ~zero_vol]
 
     n_end = len(df)
-    logger.info("  Curatare: %d -> %d randuri (%d eliminate total).",
-                n_start, n_end, n_start - n_end)
+    eliminated = n_start - n_end
+    if eliminated:
+        logger.info("  Curatare: %d randuri eliminate (NaN, preturi invalide, zile nelichide).",
+                    eliminated)
     return df
 
 
@@ -246,7 +204,7 @@ def load_panel(data_dir: Path | None = None, symbols=None,
         zips = sorted(data_dir.glob("NYSE_*.zip"))
 
     if year_dirs:
-        logger.info("Gasit %d directoare de an: %s ... %s",
+        logger.info("Gasit %d directoare de an (%s ... %s) — citesc CSV-uri zilnice...",
                     len(year_dirs), year_dirs[0].name, year_dirs[-1].name)
         frames = []
         for year_dir in year_dirs:
@@ -254,25 +212,21 @@ def load_panel(data_dir: Path | None = None, symbols=None,
             year = int(m.group(1)) if m else None
             if year is not None:
                 if start_year and year < start_year:
-                    logger.debug("Sar peste %s (inainte de %d).", year_dir.name, start_year)
                     continue
                 if end_year and year > end_year:
-                    logger.debug("Sar peste %s (dupa %d).", year_dir.name, end_year)
                     continue
             frames.append(load_year_dir(year_dir, symbols))
 
     elif zips:
-        logger.info("Gasit %d fisiere ZIP: %s", len(zips), [z.name for z in zips])
+        logger.info("Gasit %d fisiere ZIP — citesc...", len(zips))
         frames = []
         for zp in zips:
             m = re.search(r"NYSE_(\d{4})", zp.name)
             year = int(m.group(1)) if m else None
             if year is not None:
                 if start_year and year < start_year:
-                    logger.debug("Sar peste %s (inainte de %d).", zp.name, start_year)
                     continue
                 if end_year and year > end_year:
-                    logger.debug("Sar peste %s (dupa %d).", zp.name, end_year)
                     continue
             frames.append(load_year(zp, symbols))
 
@@ -290,12 +244,12 @@ def load_panel(data_dir: Path | None = None, symbols=None,
                 f"sau permite generarea sintetica (auto_generate=True)."
             )
 
-    logger.info("--- Curatare globala a panelului ---")
     panel = pd.concat(frames, ignore_index=True)
-    logger.info("--- Curatare date originale (inainte de reindexare) ---")
+    logger.info("Date brute combinate: %d randuri — curatare...", len(panel))
     panel = _clean(panel)
 
-    logger.info("--- Reindexare si forward-fill ---")
+    logger.info("Reindexare la calendarul bursier + forward-fill (max %d zile)...",
+                config.MAX_FFILL_DAYS)
     panel = _reindex_and_ffill(panel, max_ffill=config.MAX_FFILL_DAYS)
     panel = panel.sort_values(["Symbol", "Date"]).reset_index(drop=True)
 

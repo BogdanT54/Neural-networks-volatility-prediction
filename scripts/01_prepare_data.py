@@ -24,6 +24,8 @@ def setup_logging(verbose: bool = False) -> None:
     )
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    # loader-ul are prea multe mesaje DEBUG per fisier — pastram doar INFO
+    logging.getLogger("nyse_vol.data.loader").setLevel(logging.INFO)
 
 
 def _print_csv_schema():
