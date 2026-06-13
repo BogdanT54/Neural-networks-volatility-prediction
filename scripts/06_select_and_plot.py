@@ -273,11 +273,21 @@ def main():
     print(f"\nModele disponibile pentru grafice: "
           f"{list(preds.keys()) + (['GARCH'] if garch_preds is not None else []) + ['Naiv']}")
 
-    # ── Cel mai bun model pentru graficul cu toate orizonturile ──
-    preferred = ["LSTM (HPO)", "Attention (HPO)", "LSTM", "Attention"]
-    best_model_name = next((m for m in preferred if m in preds), None)
+    # ── Cel mai bun model NN pentru graficul cu toate orizonturile (dupa RMSE h=1) ──
+    best_model_name = None
+    best_rmse = float("inf")
+    for name, pv in preds.items():
+        yt = true_vol[:, 0]
+        yp = pv[:, 0]
+        mask = np.isfinite(yt) & np.isfinite(yp)
+        if mask.sum() == 0:
+            continue
+        rmse_h1 = float(np.sqrt(np.mean((yt[mask] - yp[mask]) ** 2)))
+        if rmse_h1 < best_rmse:
+            best_rmse = rmse_h1
+            best_model_name = name
     if best_model_name:
-        print(f"\nModel principal pentru graficul cu toate orizonturile: {best_model_name}")
+        print(f"\nModel principal (cel mai mic RMSE h=1 = {best_rmse:.5f}): {best_model_name}")
 
     # ── Selectie simboluri ──
     available_syms = sorted(meta["Symbol"].unique().tolist())

@@ -195,17 +195,17 @@ def plot_model_comparison(metrics_by_model: dict, metric: str, out_path: Path):
 
     ax.set_ylabel(metric_full, fontsize=11)
     ax.set_title(
-        f"Comparatie modele — {metric.upper()}  ·  Set de test (2022–2026)",
-        fontsize=13, fontweight="bold", pad=14,
+        f"Comparatie modele — {metric.upper()}  ·  Set de test (2022–2026)\n"
+        f"Contur portocaliu = cel mai bun per orizont",
+        fontsize=13, fontweight="bold", pad=12,
     )
-    ax.legend(loc="upper right", fontsize=9.5, framealpha=0.9, edgecolor="#cccccc")
-    ax.text(
-        0.5, -0.14,
-        "↓ Mai mic = mai bun   |   Contur portocaliu = cel mai bun per orizont"
-        "   |   Unitati: volatilitate zilnica absoluta (σ)",
-        transform=ax.transAxes, ha="center", fontsize=8.5, color="#555555",
+    # Legenda sub titlu, in afara ariei cu bare, ca sa nu acopere valorile
+    ax.legend(
+        loc="upper center", bbox_to_anchor=(0.5, 1.0),
+        ncol=min(n_models, 4), fontsize=9, framealpha=0.9,
+        edgecolor="#cccccc",
     )
-    fig.tight_layout(rect=[0, 0.06, 1, 1])
+    fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
@@ -215,47 +215,56 @@ def plot_model_comparison(metrics_by_model: dict, metric: str, out_path: Path):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def plot_all_models_h1(dates, actuals, preds_dict: dict, symbol: str, out_path: Path):
-    """Compara toate modelele pe h=1 pentru un singur simbol.
+    """Subplot separat pentru fiecare model (Real vs Prezis, h=1).
 
     preds_dict: {"LSTM (HPO)": array, "GARCH": array, ...}
     """
-    fig, ax = plt.subplots(figsize=(13, 5))
-    _style_ax(ax)
+    model_names = [n for n, p in preds_dict.items() if np.isfinite(p).any()]
+    n = len(model_names)
+    if n == 0:
+        return
 
-    # Aria umbrita pentru volatilitatea reala
-    ax.fill_between(dates, actuals, alpha=0.10, color=_ACTUAL_COLOR)
-
-    # Linia reala (prominenta)
-    ax.plot(dates, actuals, label="Volatilitate reala",
-            linewidth=1.2, color=_ACTUAL_COLOR, alpha=0.90, zorder=5)
-
-    # Media mobila 21-zile (trend)
+    # Trend global al seriei reale (calculat o singura data)
     roll = pd.Series(actuals).rolling(21, center=True, min_periods=5).mean().values
-    ax.plot(dates, roll, linewidth=2.0, color=_TREND_COLOR, alpha=0.55,
-            linestyle="-", label="Trend 21 zile (real)", zorder=6)
 
-    # Predictii modele
-    for name, pred in preds_dict.items():
+    ncols = 2
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(13, 4.2 * nrows), squeeze=False)
+    fig.patch.set_facecolor("white")
+
+    for i, name in enumerate(model_names):
+        ax = axes[i // ncols][i % ncols]
+        pred = preds_dict[name]
         mask = np.isfinite(pred)
-        if not mask.any():
-            continue
-        lw = 1.8 if "HPO" in name else 1.3
-        ax.plot(dates[mask], pred[mask], label=name,
-                linewidth=lw, alpha=0.85,
-                color=_model_color(name),
-                linestyle=_LS.get(name, "-"),
-                zorder=4)
 
-    ax.set_xlabel("Data", fontsize=11)
-    ax.set_ylabel("Volatilitate zilnica (σ)", fontsize=11)
-    ax.set_title(
-        f"[{symbol}]  Volatilitate reala vs. prezisa — h=1 zi\n"
-        f"Modele: {', '.join(preds_dict.keys())}  ·  Test 2022–2026",
-        fontsize=12, fontweight="bold",
+        _style_ax(ax)
+
+        ax.fill_between(dates, actuals, alpha=0.10, color=_ACTUAL_COLOR)
+        ax.plot(dates, actuals, label="Volatilitate reala",
+                linewidth=1.0, color=_ACTUAL_COLOR, alpha=0.85)
+        ax.plot(dates, roll, linewidth=1.6, color=_TREND_COLOR, alpha=0.45,
+                linestyle="--", label="Trend 21 zile")
+        ax.plot(dates[mask], pred[mask], label=name,
+                linewidth=1.8, alpha=0.88,
+                color=_model_color(name))
+
+        rmse = float(np.sqrt(np.nanmean((actuals[mask] - pred[mask]) ** 2)))
+        ax.set_title(f"{name}  ·  RMSE = {rmse:.5f}", fontsize=10.5, fontweight="bold")
+        ax.set_xlabel("Data", fontsize=9)
+        ax.set_ylabel("Volatilitate (σ)", fontsize=9)
+        ax.legend(fontsize=8.5, framealpha=0.9)
+        ax.tick_params(axis="x", labelsize=8)
+
+    # Ascunde subplot-urile ramase goale
+    for j in range(n, nrows * ncols):
+        axes[j // ncols][j % ncols].set_visible(False)
+
+    fig.suptitle(
+        f"[{symbol}]  Volatilitate reala vs. prezisa — h=1 zi  ·  Test 2022–2026",
+        fontsize=13, fontweight="bold",
     )
-    ax.legend(loc="upper left", fontsize=9, framealpha=0.92, ncol=2)
     fig.autofmt_xdate()
-    fig.tight_layout()
+    fig.tight_layout(pad=2.0)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
