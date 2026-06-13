@@ -237,7 +237,7 @@ def get_panel(force: bool = False):
     if not force and _validate_cache("silver", SILVER_CACHE):
         return pd.read_pickle(SILVER_CACHE)
 
-    bronze = get_bronze(force=force)
+    bronze = get_bronze(force=False)  # foloseste cache-ul bronze (proaspat construit)
     logger.info("Silver: validare, curatare, interpolare...")
     silver, report = silver_mod.stage(bronze, requested_symbols=list(config.SYMBOLS))
     report.print_summary()
@@ -256,7 +256,7 @@ def get_features(force: bool = False):
     if not force and _validate_cache("gold", FEATURES_CACHE):
         return pd.read_pickle(FEATURES_CACHE)
     logger.info("Gold: construiesc features si tinte...")
-    panel = get_panel(force=force)
+    panel = get_panel(force=False)  # foloseste cache-ul silver (proaspat construit)
     feats = feat_mod.build_features(panel)
     feats.to_pickle(FEATURES_CACHE)
     _save_metadata("gold", feats)
