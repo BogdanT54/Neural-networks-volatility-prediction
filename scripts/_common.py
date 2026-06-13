@@ -3,9 +3,15 @@
 Pipeline medallion:
   Bronze → Silver → Gold
   loader  → silver  → features
+
+La fiecare load din cache se verifica daca simbolurile din cache corespund
+cu SYMBOLS curent. Daca nu, se afiseaza un avertisment clar si cache-ul
+NU este folosit — modelele nu vor fi antrenate pe stocuri gresite.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import random
 import sys
@@ -25,9 +31,10 @@ logger = logging.getLogger(__name__)
 
 _SEP = "=" * 64
 
-BRONZE_CACHE  = config.PROCESSED_DIR / "bronze.pkl"
-SILVER_CACHE  = config.PROCESSED_DIR / "panel.pkl"    # "panel" = silver
+BRONZE_CACHE   = config.PROCESSED_DIR / "bronze.pkl"
+SILVER_CACHE   = config.PROCESSED_DIR / "panel.pkl"
 FEATURES_CACHE = config.PROCESSED_DIR / "features.pkl"
+METADATA_FILE  = config.PROCESSED_DIR / "pipeline_metadata.json"
 
 
 def print_banner(step: int, total: int, title: str, lines: list | None = None) -> None:
@@ -47,18 +54,110 @@ def set_seed(seed: int = config.SEED):
 
 
 # --------------------------------------------------------------------------- #
+# Metadata cache — verifica consistenta simboluri
+# --------------------------------------------------------------------------- #
+
+def _symbols_fingerprint() -> str:
+    """Hash scurt al listei curente de simboluri — detecteaza schimbari."""
+    key = ",".join(sorted(config.SYMBOLS))
+    return hashlib.md5(key.encode()).hexdigest()[:8]
+
+
+def _save_metadata(stage: str, df) -> None:
+    """Salveaza metadata dupa fiecare build de cache."""
+    import pandas as pd
+    meta: dict = {}
+    if METADATA_FILE.exists():
+        try:
+            meta = json.loads(METADATA_FILE.read_text())
+        except Exception:
+            meta = {}
+    meta[stage] = {
+        "symbols": sorted(df["Symbol"].unique().tolist()),
+        "symbols_fingerprint": _symbols_fingerprint(),
+        "n_rows": len(df),
+        "date_min": str(df["Date"].min().date()),
+        "date_max": str(df["Date"].max().date()),
+        "created_at": pd.Timestamp.now().isoformat(),
+    }
+    METADATA_FILE.write_text(json.dumps(meta, indent=2))
+
+
+def _validate_cache(stage: str, cache_path: Path) -> bool:
+    """Verifica daca cache-ul exista si a fost construit pentru SYMBOLS curent.
+
+    Returns
+    -------
+    True  — cache valid, poate fi folosit
+    False — cache outdated sau lipsa, trebuie rebuild
+    """
+    if not cache_path.exists():
+        return False
+
+    if not METADATA_FILE.exists():
+        logger.warning(
+            "Cache %s gasit dar fara metadata (posibil build anterior noii versiuni). "
+            "Foloseste --force in 01_prepare_data.py pentru a valida.",
+            stage
+        )
+        return True  # permite cu avertisment
+
+    try:
+        meta = json.loads(METADATA_FILE.read_text())
+    except Exception:
+        return True  # metadata corupta, permite
+
+    if stage not in meta:
+        return True
+
+    saved_fp   = meta[stage].get("symbols_fingerprint", "")
+    saved_syms = meta[stage].get("symbols", [])
+    current_fp = _symbols_fingerprint()
+
+    if saved_fp == current_fp:
+        # Cache valid — afiseaza simbolurile pentru transparenta
+        logger.info(
+            "Cache [%s] valid: %d simboluri → %s",
+            stage, len(saved_syms), saved_syms
+        )
+        return True
+
+    # Cache outdated — afiseaza ce s-a schimbat
+    current_syms = sorted(config.SYMBOLS)
+    added   = [s for s in current_syms if s not in saved_syms]
+    removed = [s for s in saved_syms   if s not in current_syms]
+
+    sep = "─" * 60
+    print(f"\n{sep}")
+    print(f"  ⚠️  CACHE OUTDATED — SIMBOLURI DIFERITE!")
+    print(sep)
+    print(f"  Cache [{stage}] construit pentru: {saved_syms}")
+    print(f"  SYMBOLS curent:                   {current_syms}")
+    if added:
+        print(f"  Adaugate (nu sunt in cache):      {added}")
+    if removed:
+        print(f"  Eliminate (sunt in cache extra):  {removed}")
+    print(f"\n  Modelele AR FI ANTRENATE PE STOCURI GRESITE daca s-ar")
+    print(f"  folosi cache-ul vechi. Cache ignorat — rebuild necesar.")
+    print(f"\n  Solutie: ruleaza din nou celula de preprocesare:")
+    print(f"    !python 01_prepare_data.py --force")
+    print(f"{sep}\n")
+    return False
+
+
+# --------------------------------------------------------------------------- #
 # Bronze
 # --------------------------------------------------------------------------- #
 
 def get_bronze(force: bool = False):
     import pandas as pd
-    if BRONZE_CACHE.exists() and not force:
-        logger.info("Bronze din cache: %s", BRONZE_CACHE)
+    if not force and _validate_cache("bronze", BRONZE_CACHE):
         return pd.read_pickle(BRONZE_CACHE)
     logger.info("Bronze: citesc fisierele brute NYSE...")
     bronze = loader_mod.load_bronze()
     bronze.to_pickle(BRONZE_CACHE)
-    logger.info("Bronze salvat: %s (%d randuri)", BRONZE_CACHE, len(bronze))
+    _save_metadata("bronze", bronze)
+    logger.info("Bronze salvat: %d randuri brute.", len(bronze))
     return bronze
 
 
@@ -67,13 +166,9 @@ def get_bronze(force: bool = False):
 # --------------------------------------------------------------------------- #
 
 def get_panel(force: bool = False):
-    """Silver panel = Bronze + toate verificarile de integritate + interpolare.
-
-    Alias „panel" pastrat pentru compatibilitate cu scripturile existente.
-    """
+    """Silver panel = Bronze + toate verificarile de integritate + interpolare."""
     import pandas as pd
-    if SILVER_CACHE.exists() and not force:
-        logger.info("Silver din cache: %s", SILVER_CACHE)
+    if not force and _validate_cache("silver", SILVER_CACHE):
         return pd.read_pickle(SILVER_CACHE)
 
     bronze = get_bronze(force=force)
@@ -81,8 +176,8 @@ def get_panel(force: bool = False):
     silver, report = silver_mod.stage(bronze, requested_symbols=list(config.SYMBOLS))
     report.print_summary()
     silver.to_pickle(SILVER_CACHE)
-    logger.info("Silver salvat: %s (%d randuri | %d simboluri)",
-                SILVER_CACHE, len(silver), silver["Symbol"].nunique())
+    _save_metadata("silver", silver)
+    logger.info("Silver: %d randuri | %d simboluri.", len(silver), silver["Symbol"].nunique())
     return silver
 
 
@@ -92,12 +187,12 @@ def get_panel(force: bool = False):
 
 def get_features(force: bool = False):
     import pandas as pd
-    if FEATURES_CACHE.exists() and not force:
-        logger.info("Gold (features) din cache: %s", FEATURES_CACHE)
+    if not force and _validate_cache("gold", FEATURES_CACHE):
         return pd.read_pickle(FEATURES_CACHE)
     logger.info("Gold: construiesc features si tinte...")
     panel = get_panel(force=force)
     feats = feat_mod.build_features(panel)
     feats.to_pickle(FEATURES_CACHE)
-    logger.info("Gold salvat: %s (%d randuri)", FEATURES_CACHE, len(feats))
+    _save_metadata("gold", feats)
+    logger.info("Gold: %d randuri finale.", len(feats))
     return feats
