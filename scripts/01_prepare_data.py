@@ -9,7 +9,7 @@ import argparse
 import logging
 import sys
 
-from _common import config, get_features, get_panel, print_banner, set_seed
+from _common import config, get_bronze, get_features, get_panel, print_banner, set_seed
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -160,46 +160,67 @@ def main():
     setup_logging(verbose=args.verbose)
     log = logging.getLogger(__name__)
 
-    print_banner(1, 6, "PREPROCESARE DATE NYSE 2001–2026", [
-        "Ce face:",
-        "  1. Incarca datele brute NYSE din directoare an cu an (NYSE_YYYY/)",
-        "     Fallback: fisiere ZIP (NYSE_YYYY.zip) sau date sintetice.",
-        "  2. Curata datele: elimina preturi invalide, zile nelichide",
-        "  3. Reindexeaza la calendarul bursier + forward-fill (max 3 zile)",
-        "  4. Calculeaza 9 features tehnice per simbol per zi",
-        "  5. Calculeaza tintele de volatilitate pentru h=1,5,10,20 zile",
-        "  6. Salveaza cache-ul pentru pasi urmatori",
+    print_banner(1, 6, "PREPROCESARE DATE NYSE 2001–2026  [Bronze → Silver → Gold]", [
+        "Arhitectura medallion:",
         "",
-        "Rezultat: artifacts/processed/panel.pkl + features.pkl",
+        "  BRONZE — Incarcare bruta",
+        "    • Citeste fisierele NYSE_YYYYMMDD.csv din directoarele NYSE_YYYY/",
+        "    • Fara transformari — date exact cum sunt in sursa",
+        "",
+        "  SILVER — Staging + validare de integritate",
+        "    • Dtype enforcement: Symbol str, Date datetime64, OHLCV float64",
+        "    • Verificare acoperire simboluri cerute vs. gasite in date",
+        "    • Eliminare date de weekend (NYSE nu tranzactioneaza Sat/Dum)",
+        "    • Integritate preturi: High>=max(Open,Close), Low<=min(Open,Close)",
+        "    • Deduplicare (Symbol, Date)",
+        f"    • Reindexare la calendarul bursier + interpolare liniara",
+        f"      (max {config.MAX_INTERP_DAYS} zile consecutive lipsa)",
+        "    • Generare raport de calitate a datelor",
+        "",
+        "  GOLD — Feature engineering",
+        "    • 9 features: log_ret, log_range, log_volume, vol_parkinson,",
+        "      vol_garman_klass, vol_rogers_satchell, vol_close_to_close, dow_sin/cos",
+        "    • 4 tinte: volatilitate medie realizata pentru h=1,5,10,20 zile",
+        "    • Eliminare simboluri cu sub MIN_OBS_PER_SYMBOL observatii",
+        "",
+        "Rezultat: artifacts/processed/bronze.pkl + panel.pkl + features.pkl",
         "Urmator:  python 02_train_garch.py  (baseline GARCH)",
     ])
 
     set_seed()
-    log.info("DATA_DIR = %s", config.DATA_DIR)
-    log.info("PROCESSED_DIR = %s", config.PROCESSED_DIR)
-    log.info("Estimator tinta: %s | Orizonturi: %s",
-             config.TARGET_ESTIMATOR, config.HORIZONS)
-    log.info("Split: Train <= %s | Val <= %s | Test > %s",
+    log.info("Configurare:")
+    log.info("  DATA_DIR      = %s", config.DATA_DIR)
+    log.info("  PROCESSED_DIR = %s", config.PROCESSED_DIR)
+    log.info("  Simboluri     = %s", config.SYMBOLS)
+    log.info("  Target        = %s | Orizonturi = %s", config.TARGET_ESTIMATOR, config.HORIZONS)
+    log.info("  Split: Train <= %s | Val <= %s | Test > %s",
              config.TRAIN_END, config.VAL_END, config.VAL_END)
 
-    log.info("--- Pasul 1/2: Incarcare panel ---")
-    panel = get_panel(force=args.force)
-    log.info(
-        "Panel incarcat: %d randuri | %d simboluri | %s -> %s",
-        len(panel), panel["Symbol"].nunique(),
-        panel["Date"].min().date(), panel["Date"].max().date()
-    )
+    log.info("")
+    log.info("━━━ BRONZE: Incarcare date brute ━━━")
+    bronze = get_bronze(force=args.force)
+    log.info("Bronze: %d randuri brute din %d simboluri.",
+             len(bronze), bronze["Symbol"].nunique())
 
-    log.info("--- Pasul 2/2: Construire features ---")
+    log.info("")
+    log.info("━━━ SILVER: Validare si curatare ━━━")
+    panel = get_panel(force=args.force)
+    log.info("Silver: %d randuri | %d simboluri | %s → %s",
+             len(panel), panel["Symbol"].nunique(),
+             panel["Date"].min().date(), panel["Date"].max().date())
+
+    log.info("")
+    log.info("━━━ GOLD: Feature engineering ━━━")
     feats = get_features(force=args.force)
-    log.info("Features finale: %d randuri dupa eliminarea NaN.", len(feats))
-    log.info("Salvat in: %s", config.PROCESSED_DIR)
+    log.info("Gold: %d randuri finale gata pentru antrenare.", len(feats))
 
     if args.export:
-        log.info("--- Export CSV-uri inspectabile ---")
+        log.info("")
+        log.info("━━━ EXPORT CSV-uri inspectabile ━━━")
         _export_csv(panel, feats, config.PROCESSED_DIR, log)
 
-    log.info("=== Preprocesare completa ===")
+    log.info("")
+    log.info("=== Pipeline Bronze→Silver→Gold complet ===")
 
 
 if __name__ == "__main__":

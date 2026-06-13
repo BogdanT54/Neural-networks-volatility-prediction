@@ -1,4 +1,9 @@
-"""Utilitare comune pentru scripturi: seed, cache pentru date procesate, banner."""
+"""Utilitare comune pentru scripturi: seed, cache pe trei straturi, banner.
+
+Pipeline medallion:
+  Bronze → Silver → Gold
+  loader  → silver  → features
+"""
 from __future__ import annotations
 
 import logging
@@ -9,20 +14,23 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# permite rularea scripturilor direct (python scripts/01_...py)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from nyse_vol import config  # noqa: E402
 from nyse_vol.data import features as feat_mod  # noqa: E402
 from nyse_vol.data import loader as loader_mod  # noqa: E402
+from nyse_vol.data import silver as silver_mod  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 _SEP = "=" * 64
 
+BRONZE_CACHE  = config.PROCESSED_DIR / "bronze.pkl"
+SILVER_CACHE  = config.PROCESSED_DIR / "panel.pkl"    # "panel" = silver
+FEATURES_CACHE = config.PROCESSED_DIR / "features.pkl"
+
 
 def print_banner(step: int, total: int, title: str, lines: list | None = None) -> None:
-    """Afiseaza un banner vizibil in consola pentru un pas al pipeline-ului."""
     print(f"\n{_SEP}")
     print(f"  PAS {step}/{total} — {title}")
     if lines:
@@ -32,36 +40,64 @@ def print_banner(step: int, total: int, title: str, lines: list | None = None) -
     print(f"{_SEP}\n")
 
 
-FEATURES_CACHE = config.PROCESSED_DIR / "features.pkl"
-PANEL_CACHE = config.PROCESSED_DIR / "panel.pkl"
-
-
 def set_seed(seed: int = config.SEED):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
 
 
-def get_panel(force: bool = False):
-    import pandas as pd
-    if PANEL_CACHE.exists() and not force:
-        logger.info("Panel incarcat din cache: %s (foloseste --force pentru a reface)", PANEL_CACHE)
-        return pd.read_pickle(PANEL_CACHE)
-    logger.info("Cache inexistent sau --force activ — procesez datele brute.")
-    panel = loader_mod.load_panel()
-    panel.to_pickle(PANEL_CACHE)
-    logger.info("Panel salvat in cache: %s", PANEL_CACHE)
-    return panel
+# --------------------------------------------------------------------------- #
+# Bronze
+# --------------------------------------------------------------------------- #
 
+def get_bronze(force: bool = False):
+    import pandas as pd
+    if BRONZE_CACHE.exists() and not force:
+        logger.info("Bronze din cache: %s", BRONZE_CACHE)
+        return pd.read_pickle(BRONZE_CACHE)
+    logger.info("Bronze: citesc fisierele brute NYSE...")
+    bronze = loader_mod.load_bronze()
+    bronze.to_pickle(BRONZE_CACHE)
+    logger.info("Bronze salvat: %s (%d randuri)", BRONZE_CACHE, len(bronze))
+    return bronze
+
+
+# --------------------------------------------------------------------------- #
+# Silver  (Bronze + validare + interpolare)
+# --------------------------------------------------------------------------- #
+
+def get_panel(force: bool = False):
+    """Silver panel = Bronze + toate verificarile de integritate + interpolare.
+
+    Alias „panel" pastrat pentru compatibilitate cu scripturile existente.
+    """
+    import pandas as pd
+    if SILVER_CACHE.exists() and not force:
+        logger.info("Silver din cache: %s", SILVER_CACHE)
+        return pd.read_pickle(SILVER_CACHE)
+
+    bronze = get_bronze(force=force)
+    logger.info("Silver: validare, curatare, interpolare...")
+    silver, report = silver_mod.stage(bronze, requested_symbols=list(config.SYMBOLS))
+    report.print_summary()
+    silver.to_pickle(SILVER_CACHE)
+    logger.info("Silver salvat: %s (%d randuri | %d simboluri)",
+                SILVER_CACHE, len(silver), silver["Symbol"].nunique())
+    return silver
+
+
+# --------------------------------------------------------------------------- #
+# Gold  (Silver + features + tinte)
+# --------------------------------------------------------------------------- #
 
 def get_features(force: bool = False):
     import pandas as pd
     if FEATURES_CACHE.exists() and not force:
-        logger.info("Features incarcate din cache: %s (foloseste --force pentru a reface)", FEATURES_CACHE)
+        logger.info("Gold (features) din cache: %s", FEATURES_CACHE)
         return pd.read_pickle(FEATURES_CACHE)
-    logger.info("Cache inexistent sau --force activ — construiesc features.")
+    logger.info("Gold: construiesc features si tinte...")
     panel = get_panel(force=force)
     feats = feat_mod.build_features(panel)
     feats.to_pickle(FEATURES_CACHE)
-    logger.info("Features salvate in cache: %s", FEATURES_CACHE)
+    logger.info("Gold salvat: %s (%d randuri)", FEATURES_CACHE, len(feats))
     return feats
