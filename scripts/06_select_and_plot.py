@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from _common import config, get_features, print_banner, set_seed
+from _common import config, get_features, print_banner, print_data_summary, set_seed
 from nyse_vol.config import ModelConfig
 from nyse_vol.data import dataset as ds
 from nyse_vol.eval import metrics as M
@@ -237,6 +237,9 @@ def main():
     set_seed()
     feats = get_features()
     splits = ds.build_splits(feats)
+
+    # ── Context: stocuri disponibile pentru grafice ──
+    print_data_summary(feats, splits)
 
     y_true_log = ds.inverse_target(splits.y_test.numpy(), splits)
     true_vol = np.exp(y_true_log)

@@ -13,7 +13,7 @@ from dataclasses import replace
 import numpy as np
 import torch
 
-from _common import config, get_features, print_banner, set_seed
+from _common import config, get_features, print_banner, print_data_summary, set_seed
 from nyse_vol.config import ModelConfig, TrainConfig
 from nyse_vol.data import dataset as ds
 from nyse_vol.eval import plots
@@ -74,16 +74,12 @@ def main():
     feats = get_features()
     splits = ds.build_splits(feats)
 
-    n_train = len(splits.X_train)
-    n_val = len(splits.X_val)
-    n_test = len(splits.X_test)
+    # ── Context complet: stocuri, date, split-uri ──
+    print_data_summary(feats, splits)
+
     n_feat = splits.X_train.shape[-1]
-    n_out = splits.y_train.shape[-1]
-    print(f"Split final:")
-    print(f"  Train: {n_train:>7,} ferestre  (fiecare = 60 zile × {n_feat} features)")
-    print(f"  Val:   {n_val:>7,} ferestre")
-    print(f"  Test:  {n_test:>7,} ferestre")
-    print(f"  Iesire: {n_out} orizonturi de predictie (h=1,5,10,20 zile)\n")
+    n_out  = splits.y_train.shape[-1]
+    print(f"\n  Fiecare fereastra de intrare: {config.WINDOW} zile × {n_feat} features → {n_out} orizonturi prezise\n")
 
     base_cfg = TrainConfig()
     if args.epochs:

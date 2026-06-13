@@ -11,7 +11,7 @@ import itertools
 import numpy as np
 import pandas as pd
 
-from _common import config, get_features, get_panel, print_banner, set_seed
+from _common import config, get_features, get_panel, print_banner, print_data_summary, set_seed
 from nyse_vol.data.features import TARGET_COLS
 from nyse_vol.models.garch import garch_forecast_panel
 
@@ -57,11 +57,17 @@ def main():
     feats = get_features()
     truth = _true_targets(feats)
 
-    test_start = feats[feats["Date"] > config.VAL_END]["Date"].min()
-    test_end = feats["Date"].max()
-    n_test_days = feats[feats["Date"] > config.VAL_END]["Date"].nunique()
-    print(f"Perioada de test: {test_start.date()} -> {test_end.date()} "
-          f"({n_test_days} zile bursiere)")
+    # ── Context: ce stocuri, ce date ──
+    print_data_summary(feats)
+
+    feats_test = feats[feats["Date"] > config.VAL_END]
+    test_start  = feats_test["Date"].min()
+    test_end    = feats_test["Date"].max()
+    n_test_days = feats_test["Date"].nunique()
+    n_test_sym  = feats_test["Symbol"].nunique()
+    print(f"Perioada de test: {test_start.date()} → {test_end.date()}  "
+          f"({n_test_days} zile bursiere × {n_test_sym} stocuri = "
+          f"{len(feats_test):,} puncte de evaluat)")
 
     if args.search:
         combos = list(itertools.product(config.GARCH_ORDERS, config.GARCH_DISTS))

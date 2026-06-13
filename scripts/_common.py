@@ -146,6 +146,72 @@ def _validate_cache(stage: str, cache_path: Path) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Sumar explicativ — afisat in fiecare script inainte de antrenare
+# --------------------------------------------------------------------------- #
+
+def print_data_summary(feats, splits=None) -> None:
+    """Afiseaza context complet despre datele si split-urile incarcate.
+
+    Apelat la inceputul fiecarui script (02-06) dupa get_features() si
+    optional dupa build_splits() pentru a confirma exact ce stocuri,
+    ce date si ce se prezice in acel pas al pipeline-ului.
+    """
+    import pandas as pd
+
+    symbols     = sorted(feats["Symbol"].unique())
+    sym_counts  = feats.groupby("Symbol").size()
+    sym_dates   = feats.groupby("Symbol")["Date"].agg(["min", "max"])
+    total_rows  = len(feats)
+
+    sep = "─" * 62
+    print(f"\n{sep}")
+    print(f"  CONTEXT DATE — ce se antreneaza / evalueaza")
+    print(sep)
+    print(f"  Sursa:    {FEATURES_CACHE}")
+    print(f"  Stocuri ({len(symbols)}):  {', '.join(symbols)}")
+    print(f"  Perioada: {feats['Date'].min().date()}  →  {feats['Date'].max().date()}")
+    print(f"  Total:    {total_rows:,} randuri  ({total_rows // len(symbols):,} zile medii/stoc)")
+
+    print(f"\n  Zile per stoc:")
+    for sym in symbols:
+        cnt  = sym_counts[sym]
+        dmin = sym_dates.loc[sym, "min"].date()
+        dmax = sym_dates.loc[sym, "max"].date()
+        print(f"    {sym:<6}  {cnt:>5,} zile   {dmin} → {dmax}")
+
+    print(f"\n  Ce se prezice (tinte):")
+    print(f"    Estimator: {config.TARGET_ESTIMATOR}  (volatilitate zilnica Garman-Klass)")
+    for h in config.HORIZONS:
+        unit = "zi" if h == 1 else "zile"
+        print(f"    h={h:>2}  →  media vol. realizate in urmatoarele {h} {unit} bursiere")
+
+    if splits is not None:
+        mt    = splits.meta_train
+        mv    = splits.meta_val
+        mtest = splits.meta_test
+
+        print(f"\n  Split-uri (strict cronologice — fara scurgere de informatii):")
+        print(f"    TRAIN  ≤{config.TRAIN_END}: "
+              f"{len(splits.X_train):>7,} ferestre  "
+              f"({mt['Date'].min().date()} → {mt['Date'].max().date()})")
+        print(f"    VAL    {config.TRAIN_END[:4]}–{config.VAL_END[:4]}:       "
+              f"{len(splits.X_val):>7,} ferestre  "
+              f"({mv['Date'].min().date()} → {mv['Date'].max().date()})")
+        print(f"    TEST   >{config.VAL_END}: "
+              f"{len(splits.X_test):>7,} ferestre  "
+              f"({mtest['Date'].min().date()} → {mtest['Date'].max().date()})"
+              f"  ← evaluare finala")
+
+        test_counts = mtest.groupby("Symbol").size()
+        print(f"\n  Ferestre TEST per stoc:")
+        for sym in symbols:
+            cnt = test_counts.get(sym, 0)
+            print(f"    {sym:<6}  {cnt:>5,} ferestre")
+
+    print(sep)
+
+
+# --------------------------------------------------------------------------- #
 # Bronze
 # --------------------------------------------------------------------------- #
 

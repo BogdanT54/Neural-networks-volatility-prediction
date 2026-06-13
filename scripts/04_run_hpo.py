@@ -12,7 +12,7 @@ from dataclasses import asdict, replace
 
 import torch
 
-from _common import config, get_features, print_banner, set_seed
+from _common import config, get_features, print_banner, print_data_summary, set_seed
 from nyse_vol.config import ModelConfig, TrainConfig
 from nyse_vol.data import dataset as ds
 from nyse_vol.eval import plots
@@ -66,6 +66,11 @@ def main():
     set_seed()
     feats = get_features()
     splits = ds.build_splits(feats)
+
+    # ── Context: HPO pe aceste stocuri, optimizat pe VAL ──
+    print_data_summary(feats, splits)
+    print(f"\n  HPO optimizeaza val_loss pe setul de VALIDARE ({config.TRAIN_END[:4]}–{config.VAL_END[:4]}).")
+    print(f"  Setul de TEST (>{config.VAL_END}) NU este atins — ramane secret pana la pasul 5.\n")
 
     log_path = config.METRICS_DIR / f"hpo_{args.model}.csv"
     print(f"Incep cautarea: {args.trials} trials x {args.epochs} epoci...\n")
