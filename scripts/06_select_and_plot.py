@@ -168,7 +168,7 @@ def _plots_for_symbol(sym, meta, true_vol, preds, garch_preds, prev_vol_arr,
         preds_h1["GARCH"] = garch_preds[idx, 0]
     preds_h1["Naiv"] = pv_sym
 
-    out1 = config.PLOTS_DIR / f"stock_{sym}_h1_toate_modelele.png"
+    out1 = config.PLOTS_STOCURI_DIR / f"stock_{sym}_h1_toate_modelele.png"
     plots.plot_all_models_h1(dates, actuals_by_h[1], preds_h1, sym, out1)
     print(f"    -> {out1.name}")
 
@@ -176,7 +176,7 @@ def _plots_for_symbol(sym, meta, true_vol, preds, garch_preds, prev_vol_arr,
     if best_model_name and best_model_name in preds:
         best_pv = preds[best_model_name]
         preds_by_h = {h: best_pv[idx, j] for j, h in enumerate(config.HORIZONS)}
-        out2 = config.PLOTS_DIR / f"stock_{sym}_toate_orizonturile.png"
+        out2 = config.PLOTS_STOCURI_DIR / f"stock_{sym}_toate_orizonturile.png"
         plots.plot_all_horizons(dates, actuals_by_h, preds_by_h, sym,
                                 best_model_name, out2)
         print(f"    -> {out2.name}")
@@ -205,7 +205,7 @@ def _plots_for_symbol(sym, meta, true_vol, preds, garch_preds, prev_vol_arr,
             metrics_rows.append({"Symbol": sym, "model": name, "horizon": h, **met})
 
     if metrics_rows:
-        out3 = config.PLOTS_DIR / f"stock_{sym}_metrici.png"
+        out3 = config.PLOTS_STOCURI_DIR / f"stock_{sym}_metrici.png"
         plots.plot_metrics_per_stock(metrics_rows, sym, out3)
         print(f"    -> {out3.name}")
 
@@ -316,13 +316,12 @@ def main():
     out_csv = config.METRICS_DIR / "results_selected_stocks.csv"
     results_df.to_csv(out_csv, index=False)
     print(f"\n  Tabel complet (toate orizonturile) salvat: {out_csv}")
-    print(f"  Grafice salvate in: {config.PLOTS_DIR}")
-    print(f"  Fisiere generate:")
+    print(f"  Grafice salvate in: {config.PLOTS_STOCURI_DIR}")
+    print(f"  Fisiere generate per stock:")
     for sym in chosen_syms:
-        print(f"    stock_{sym}_h1_toate_modelele.png")
-        if best_model_name:
-            print(f"    stock_{sym}_toate_orizonturile.png")
-        print(f"    stock_{sym}_metrici.png")
+        print(f"    {sym}: stock_{sym}_h1_toate_modelele.png"
+              f" | stock_{sym}_toate_orizonturile.png"
+              f" | stock_{sym}_metrici.png")
 
 
 if __name__ == "__main__":

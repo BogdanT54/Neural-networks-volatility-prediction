@@ -146,7 +146,7 @@ def main():
 
     plots.plot_loss_curves(
         history, f"Curbe de loss — {args.model.upper()} (HPO reantrenat)",
-        config.PLOTS_DIR / f"{args.model}_best_hpo_loss.png",
+        config.PLOTS_ANTRENARE_DIR / f"{args.model}_best_hpo_loss.png",
     )
 
     print(f"\n{'=' * 62}")

@@ -208,9 +208,11 @@ def main():
     print(f"  Tabel salvat: {out_csv}")
     print(f"{'=' * 62}")
 
-    # ── Grafice comparative ──
-    plots.plot_model_comparison(rmse_by_model, "rmse", config.PLOTS_DIR / "compare_rmse.png")
-    plots.plot_model_comparison(qlike_by_model, "qlike", config.PLOTS_DIR / "compare_qlike.png")
+    # ── Grafice comparative (bar charts RMSE/QLIKE) ──
+    plots.plot_model_comparison(rmse_by_model, "rmse",
+                                config.PLOTS_COMPARATII_DIR / "compare_rmse.png")
+    plots.plot_model_comparison(qlike_by_model, "qlike",
+                                config.PLOTS_COMPARATII_DIR / "compare_qlike.png")
 
     # ── Grafice pred vs real pentru simbolul cel mai frecvent ──
     sym = meta["Symbol"].value_counts().index[0]
@@ -221,13 +223,16 @@ def main():
     for name, pv in preds.items():
         if not np.isfinite(pv[idx, 0]).any():
             continue
+        fname = f"pred_vs_true_{name.lower().replace(' ', '_')}_{sym}.png"
         plots.plot_pred_vs_true(
             dates, true_vol[idx, 0], pv[idx, 0],
             f"{name}: volatilitate prezisa vs reala — {sym} (h=1)",
-            config.PLOTS_DIR / f"pred_vs_true_{name.lower().replace(' ', '_')}_{sym}.png")
+            config.PLOTS_PREDICTII_DIR / fname)
 
-    print(f"\n  Grafice salvate in: {config.PLOTS_DIR}")
-    print(f"  Simbolul exemplu:   {sym}")
+    print(f"\n  Grafice comparatii: {config.PLOTS_COMPARATII_DIR}")
+    print(f"    compare_rmse.png, compare_qlike.png")
+    print(f"  Grafice predictii:  {config.PLOTS_PREDICTII_DIR}")
+    print(f"    pred_vs_true_*_{sym}.png  (simbol exemplu)")
     print(f"\n  Pentru grafice detaliate per stock ales:")
     print(f"    python 06_select_and_plot.py --symbols {sym} JPM GS")
     print(f"    python 06_select_and_plot.py  (selectie interactiva)")

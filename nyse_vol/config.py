@@ -23,11 +23,19 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", ROOT_DIR / "data_raw"))
 # Directorul cu artefacte generate (date procesate, modele, grafice, metrici).
 ARTIFACTS_DIR = Path(os.environ.get("ARTIFACTS_DIR", ROOT_DIR / "artifacts"))
 PROCESSED_DIR = ARTIFACTS_DIR / "processed"
-MODELS_DIR = ARTIFACTS_DIR / "models"
-PLOTS_DIR = ARTIFACTS_DIR / "plots"
-METRICS_DIR = ARTIFACTS_DIR / "metrics"
+MODELS_DIR    = ARTIFACTS_DIR / "models"
+METRICS_DIR   = ARTIFACTS_DIR / "metrics"
 
-for _d in (ARTIFACTS_DIR, PROCESSED_DIR, MODELS_DIR, PLOTS_DIR, METRICS_DIR):
+# Subdirectoare plots organizate pe tip de continut
+PLOTS_DIR           = ARTIFACTS_DIR / "plots"
+PLOTS_ANTRENARE_DIR = PLOTS_DIR / "antrenare"    # loss curves, heatmap atentie
+PLOTS_COMPARATII_DIR = PLOTS_DIR / "comparatii"  # RMSE/QLIKE bar charts globale
+PLOTS_PREDICTII_DIR = PLOTS_DIR / "predictii"    # pred vs real per model+simbol
+PLOTS_STOCURI_DIR   = PLOTS_DIR / "stocuri"      # grafice detaliate per stock ales
+
+for _d in (ARTIFACTS_DIR, PROCESSED_DIR, MODELS_DIR, METRICS_DIR,
+           PLOTS_DIR, PLOTS_ANTRENARE_DIR, PLOTS_COMPARATII_DIR,
+           PLOTS_PREDICTII_DIR, PLOTS_STOCURI_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 # --------------------------------------------------------------------------- #

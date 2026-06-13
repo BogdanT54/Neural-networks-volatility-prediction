@@ -28,7 +28,7 @@ def _save(model, name, history):
         json.dump({k: v for k, v in history.items() if k != "config"}
                   | {"config": history["config"]}, f, indent=2)
     plots.plot_loss_curves(history, f"Curbe de loss — {name}",
-                           config.PLOTS_DIR / f"{name}_loss.png")
+                           config.PLOTS_ANTRENARE_DIR / f"{name}_loss.png")
 
 
 def main():
@@ -114,12 +114,12 @@ def main():
             _, attn = model(xb)
         plots.plot_attention_heatmap(
             attn[0].cpu().numpy(), "Ponderi de atentie (exemplu test)",
-            config.PLOTS_DIR / "attention_heatmap.png")
+            config.PLOTS_ANTRENARE_DIR / "attention_heatmap.png")
         model.return_attention = False
 
     print(f"\n{'=' * 62}")
-    print(f"  Artefacte salvate in: {config.MODELS_DIR}")
-    print(f"  Grafice salvate in:   {config.PLOTS_DIR}")
+    print(f"  Modele salvate in:  {config.MODELS_DIR}")
+    print(f"  Grafice salvate in: {config.PLOTS_ANTRENARE_DIR}")
     print(f"{'=' * 62}")
 
 
