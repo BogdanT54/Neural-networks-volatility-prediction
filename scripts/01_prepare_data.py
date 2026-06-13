@@ -160,7 +160,8 @@ def main():
 
     print_banner(1, 6, "PREPROCESARE DATE NYSE 2001–2026", [
         "Ce face:",
-        "  1. Incarca datele brute NYSE din fisiere ZIP (an cu an)",
+        "  1. Incarca datele brute NYSE din directoare an cu an (NYSE_YYYY/)",
+        "     Fallback: fisiere ZIP (NYSE_YYYY.zip) sau date sintetice.",
         "  2. Curata datele: elimina preturi invalide, zile nelichide",
         "  3. Reindexeaza la calendarul bursier + forward-fill (max 3 zile)",
         "  4. Calculeaza 9 features tehnice per simbol per zi",

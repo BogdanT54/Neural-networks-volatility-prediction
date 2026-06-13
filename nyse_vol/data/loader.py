@@ -1,11 +1,16 @@
-"""Incarcarea datelor NYSE din zip-uri an cu an in format "long".
+"""Incarcarea datelor NYSE din directoare an cu an (sau zip-uri ca fallback).
 
-Citeste `NYSE_<YYYY>.zip` -> fisiere zilnice `NYSE_<YYYYMMDD>.csv` si le
-concateneaza intr-un singur DataFrame cu coloanele:
-    Symbol, Date (datetime), Open, High, Low, Close, Volume
+Structura principala (date reale Kaggle):
+    DATA_DIR/NYSE_2001/NYSE_20010102.csv
+    DATA_DIR/NYSE_2001/NYSE_20010103.csv
+    ...
+    DATA_DIR/NYSE_2025/NYSE_20251231.csv
+
+Fallback (date sintetice generate local):
+    DATA_DIR/NYSE_2001.zip  (contine NYSE_20010102.csv etc.)
 
 Data este derivata *autoritar* din numele fisierului (`NYSE_YYYYMMDD.csv`),
-nu din coloana Date (care e in format ambiguu `d-Mon-yy`).
+nu din coloana Date (care poate fi in format ambiguu `d-Mon-yy`).
 
 Curatare aplicata:
 - elimina randuri cu preturi non-pozitive sau NaN;
@@ -27,6 +32,8 @@ from nyse_vol import config
 logger = logging.getLogger(__name__)
 
 _DATE_RE = re.compile(r"NYSE_(\d{8})\.csv$", re.IGNORECASE)
+_YEAR_DIR_RE = re.compile(r"^NYSE_(\d{4})", re.IGNORECASE)
+_YEAR_ZIP_RE = re.compile(r"^NYSE_(\d{4})\.zip$", re.IGNORECASE)
 _COLS = ["Symbol", "Date", "Open", "High", "Low", "Close", "Volume"]
 
 
@@ -34,11 +41,44 @@ def _read_daily_csv(raw: bytes, date: pd.Timestamp) -> pd.DataFrame:
     df = pd.read_csv(io.BytesIO(raw))
     df.columns = [c.strip() for c in df.columns]
     df["Date"] = date
-    # coloane lipsa fata de schema asteptata
     missing_cols = [c for c in _COLS if c not in df.columns and c != "Date"]
     if missing_cols:
         logger.warning("  [%s] Coloane lipsa in CSV: %s", date.date(), missing_cols)
     return df[_COLS]
+
+
+def load_year_dir(year_dir: Path, symbols: set[str] | None = None) -> pd.DataFrame:
+    """Incarca toate zilele dintr-un director de an, optional filtrand pe simboluri."""
+    logger.info("Procesez directorul: %s", year_dir.name)
+    csv_files = sorted(f for f in year_dir.iterdir() if _DATE_RE.search(f.name))
+    logger.info("  Gasit %d fisiere zilnice in director.", len(csv_files))
+    frames = []
+    skipped = 0
+    for csv_file in csv_files:
+        m = _DATE_RE.search(csv_file.name)
+        date = pd.to_datetime(m.group(1), format="%Y%m%d")
+        logger.debug("  Citesc: %s (%s)", csv_file.name, date.date())
+        try:
+            df = _read_daily_csv(csv_file.read_bytes(), date)
+        except Exception as exc:
+            logger.warning("  Eroare la citirea %s: %s — sarind peste.", csv_file.name, exc)
+            skipped += 1
+            continue
+        if symbols is not None:
+            before = len(df)
+            df = df[df["Symbol"].isin(symbols)]
+            dropped = before - len(df)
+            if dropped:
+                logger.debug("  [%s] %d simboluri filtrate.", date.date(), dropped)
+        frames.append(df)
+    if skipped:
+        logger.warning("  %d fisiere zilnice sarite din cauza erorilor.", skipped)
+    if not frames:
+        logger.warning("  Niciun fisier valid gasit in %s.", year_dir.name)
+        return pd.DataFrame(columns=_COLS)
+    result = pd.concat(frames, ignore_index=True)
+    logger.info("  => %d randuri incarcate din %s", len(result), year_dir.name)
+    return result
 
 
 def load_year(zip_path: Path, symbols: set[str] | None = None) -> pd.DataFrame:
@@ -66,8 +106,7 @@ def load_year(zip_path: Path, symbols: set[str] | None = None) -> pd.DataFrame:
                 df = df[df["Symbol"].isin(symbols)]
                 dropped = before - len(df)
                 if dropped:
-                    logger.debug("  [%s] %d simboluri filtrate (nu sunt in lista dorita)",
-                                 date.date(), dropped)
+                    logger.debug("  [%s] %d simboluri filtrate.", date.date(), dropped)
             frames.append(df)
     if skipped:
         logger.warning("  %d fisiere zilnice sarite din cauza erorilor.", skipped)
@@ -142,11 +181,9 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     for c in ["Open", "High", "Low", "Close", "Volume"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # NaN-uri in coloanele de pret
     nan_mask = df[["Open", "High", "Low", "Close"]].isna().any(axis=1)
     n_nan = nan_mask.sum()
     if n_nan:
-        # afiseaza care simboluri au cele mai multe NaN-uri
         top_nan = (df[nan_mask].groupby("Symbol").size()
                    .sort_values(ascending=False).head(5))
         logger.warning(
@@ -156,14 +193,12 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
         )
     df = df[~nan_mask]
 
-    # preturi non-pozitive
     neg_mask = ~(df[["Open", "High", "Low", "Close"]] > 0).all(axis=1)
     n_neg = neg_mask.sum()
     if n_neg:
         logger.warning("  Preturi <= 0: %d randuri eliminate.", n_neg)
     df = df[~neg_mask]
 
-    # zile nelichide: range nul sau volum zero
     flat = df["High"] == df["Low"]
     zero_vol = df["Volume"] <= 0
     n_flat = flat.sum()
@@ -187,9 +222,10 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
 def load_panel(data_dir: Path | None = None, symbols=None,
                start_year: int | None = None, end_year: int | None = None,
                auto_generate: bool = True) -> pd.DataFrame:
-    """Incarca panelul complet (toate zip-urile) intr-un DataFrame "long".
+    """Incarca panelul complet intr-un DataFrame "long".
 
-    Daca nu exista zip-uri si `auto_generate` e True, genereaza date sintetice.
+    Cauta mai intai directoare de an (NYSE_YYYY*/), apoi zip-uri (NYSE_YYYY.zip).
+    Daca nu exista niciuna si `auto_generate` e True, genereaza date sintetice.
     Rezultatul e sortat dupa (Symbol, Date) si curatat.
     """
     data_dir = Path(data_dir or config.DATA_DIR)
@@ -199,47 +235,70 @@ def load_panel(data_dir: Path | None = None, symbols=None,
     logger.info("Simboluri cerute: %d (%s ... %s)",
                 len(symbols), sorted(symbols)[0], sorted(symbols)[-1])
 
-    zips = sorted(data_dir.glob("NYSE_*.zip"))
-    if not zips and auto_generate:
-        logger.info("Nu s-au gasit zip-uri NYSE — generez date sintetice...")
-        from nyse_vol.data import sample_generator
-        sample_generator.generate(data_dir, sorted(symbols))
-        zips = sorted(data_dir.glob("NYSE_*.zip"))
-    if not zips:
-        raise FileNotFoundError(
-            f"Nu exista zip-uri NYSE in {data_dir}. Seteaza DATA_DIR sau "
-            f"permite generarea sintetica (auto_generate=True)."
+    # ── Detectare structura date: directoare sau zip-uri ──
+    year_dirs = []
+    zips = []
+    if data_dir.exists():
+        year_dirs = sorted(
+            d for d in data_dir.iterdir()
+            if d.is_dir() and _YEAR_DIR_RE.match(d.name)
         )
+        zips = sorted(data_dir.glob("NYSE_*.zip"))
 
-    logger.info("Gasit %d fisiere ZIP: %s", len(zips), [z.name for z in zips])
+    if year_dirs:
+        logger.info("Gasit %d directoare de an: %s ... %s",
+                    len(year_dirs), year_dirs[0].name, year_dirs[-1].name)
+        frames = []
+        for year_dir in year_dirs:
+            m = _YEAR_DIR_RE.match(year_dir.name)
+            year = int(m.group(1)) if m else None
+            if year is not None:
+                if start_year and year < start_year:
+                    logger.debug("Sar peste %s (inainte de %d).", year_dir.name, start_year)
+                    continue
+                if end_year and year > end_year:
+                    logger.debug("Sar peste %s (dupa %d).", year_dir.name, end_year)
+                    continue
+            frames.append(load_year_dir(year_dir, symbols))
 
-    frames = []
-    for zp in zips:
-        m = re.search(r"NYSE_(\d{4})", zp.name)
-        year = int(m.group(1)) if m else None
-        if year is not None:
-            if start_year and year < start_year:
-                logger.debug("Sar peste %s (inainte de %d).", zp.name, start_year)
-                continue
-            if end_year and year > end_year:
-                logger.debug("Sar peste %s (dupa %d).", zp.name, end_year)
-                continue
-        frames.append(load_year(zp, symbols))
+    elif zips:
+        logger.info("Gasit %d fisiere ZIP: %s", len(zips), [z.name for z in zips])
+        frames = []
+        for zp in zips:
+            m = re.search(r"NYSE_(\d{4})", zp.name)
+            year = int(m.group(1)) if m else None
+            if year is not None:
+                if start_year and year < start_year:
+                    logger.debug("Sar peste %s (inainte de %d).", zp.name, start_year)
+                    continue
+                if end_year and year > end_year:
+                    logger.debug("Sar peste %s (dupa %d).", zp.name, end_year)
+                    continue
+            frames.append(load_year(zp, symbols))
+
+    else:
+        if auto_generate:
+            logger.info("Nu s-au gasit date NYSE — generez date sintetice...")
+            from nyse_vol.data import sample_generator
+            sample_generator.generate(data_dir, sorted(symbols))
+            zips = sorted(data_dir.glob("NYSE_*.zip"))
+            frames = [load_year(zp, symbols) for zp in zips]
+        else:
+            raise FileNotFoundError(
+                f"Nu exista date NYSE in {data_dir}. "
+                f"Seteaza DATA_DIR la directorul cu folderele NYSE_YYYY/ "
+                f"sau permite generarea sintetica (auto_generate=True)."
+            )
 
     logger.info("--- Curatare globala a panelului ---")
     panel = pd.concat(frames, ignore_index=True)
     logger.info("--- Curatare date originale (inainte de reindexare) ---")
     panel = _clean(panel)
 
-    # Reindexare la calendarul bursier + forward-fill pentru zile lipsa.
-    # Se face DUPA curatare: zilele flat/corupte din datele originale sunt
-    # eliminate inainte; zilele flat rezultate din forward-fill sunt pastrate
-    # intentionat (reprezinta absenta informatiei, semnal valid pentru LSTM).
     logger.info("--- Reindexare si forward-fill ---")
     panel = _reindex_and_ffill(panel, max_ffill=config.MAX_FFILL_DAYS)
     panel = panel.sort_values(["Symbol", "Date"]).reset_index(drop=True)
 
-    # pastreaza doar simbolurile cu suficiente observatii
     counts = panel.groupby("Symbol")["Date"].transform("size")
     before_filter = panel["Symbol"].nunique()
     panel = panel[counts >= config.MIN_OBS_PER_SYMBOL].reset_index(drop=True)
