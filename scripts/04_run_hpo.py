@@ -81,16 +81,18 @@ def main():
         device=config.DEVICE, seed=config.SEED, log_path=log_path,
     )
 
-    print(f"\n{'=' * 62}")
-    print(f"  TOP 5 CONFIGURATII (dupa val_loss):")
-    print(f"{'─' * 62}")
-    cols = ["trial", "best_val", "rmse_val_h1", "hidden_size",
-            "num_layers", "dropout", "optimizer", "lr"]
+    print(f"\n{'=' * 78}")
+    print(f"  TOP 5 CONFIGURATII (dupa val_loss, MSE pe tinte standardizate):")
+    print(f"  Nota: best_val < 1.0 = mai bun decat media; baseline=1.0")
+    print(f"{'─' * 78}")
+    cols = ["trial", "best_val", "rmse_val_h1",
+            "hidden_size", "num_layers", "dropout", "bidirectional",
+            "head_activation", "attention", "optimizer", "lr", "weight_decay"]
     avail_cols = [c for c in cols if c in df.columns]
     print(df.head(5)[avail_cols].to_string(index=False))
-    print(f"{'─' * 62}")
+    print(f"{'─' * 78}")
     print(f"  Log complet: {log_path}")
-    print(f"{'=' * 62}")
+    print(f"{'=' * 78}")
 
     # ── Reantrenare cu configuratia optima ──
     model_cfg, train_cfg_hpo = best_configs(df)

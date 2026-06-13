@@ -77,18 +77,20 @@ def random_search(model_factory, splits, make_loaders, n_trials: int = 10,
         train_loader, val_loader, _ = make_loaders(splits, train_cfg.batch_size)
         model = model_factory(n_features, n_outputs, model_cfg)
 
-        bidir_str = "bidir" if model_cfg.bidirectional else "unidir"
-        print(f"\n[Trial {trial + 1}/{n_trials}] "
-              f"hidden={model_cfg.hidden_size} | layers={model_cfg.num_layers} | "
-              f"dropout={model_cfg.dropout} | {bidir_str} | "
-              f"act={model_cfg.head_activation} | "
-              f"opt={train_cfg.optimizer} | lr={train_cfg.lr}")
+        bidir_str = "bidir=True " if model_cfg.bidirectional else "bidir=False"
+        print(f"\n[Trial {trial + 1}/{n_trials}]")
+        print(f"  Arhitectura : hidden={model_cfg.hidden_size} | layers={model_cfg.num_layers} | "
+              f"dropout={model_cfg.dropout} | {bidir_str}")
+        print(f"  Activare    : act={model_cfg.head_activation} | attn={model_cfg.attention}")
+        print(f"  Optimizer   : opt={train_cfg.optimizer} | lr={train_cfg.lr} | "
+              f"weight_decay={train_cfg.weight_decay}")
 
         _, history = train_model(model, train_loader, val_loader, train_cfg,
                                  device=device, verbose=True, print_every=print_every)
 
         val_rmse, val_mae = _val_metrics_h1(model, splits, make_loaders, device)
-        print(f"  → best_val={history['best_val']:.4f} | "
+        bv = history["best_val"]
+        print(f"  → best_val={bv:.4f} (MSE pe tinte standardizate; baseline=1.0, mai mic=mai bun) | "
               f"RMSE_val(h=1)={val_rmse:.5f} | MAE_val(h=1)={val_mae:.5f}")
 
         row = {
