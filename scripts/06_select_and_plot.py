@@ -182,11 +182,16 @@ def _plots_for_symbol(sym, meta, true_vol, preds, garch_preds, prev_vol_arr,
         print(f"    -> {out2.name}")
 
     # ── Graf 3: metrici per model (bar chart) ──
+    # Toate array-urile de predictii trebuie sa fie in spatiul global de indici
+    # (marime n_test_total, nu per-simbol) pentru ca idx contine indici globali.
     metrics_rows = []
     all_preds_for_metrics = dict(preds)
     if garch_preds is not None:
         all_preds_for_metrics["GARCH"] = garch_preds
-    all_preds_for_metrics["Naiv"] = np.repeat(pv_sym[:, None], len(config.HORIZONS), axis=1)
+    # Naiv (persistence) in spatiu global: prev_vol_arr are n_test_total randuri
+    all_preds_for_metrics["Naiv"] = np.repeat(
+        prev_vol_arr[:, None], len(config.HORIZONS), axis=1
+    )
 
     for name, pv_arr in all_preds_for_metrics.items():
         for j, h in enumerate(config.HORIZONS):

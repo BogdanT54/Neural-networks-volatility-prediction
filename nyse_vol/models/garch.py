@@ -119,6 +119,11 @@ def garch_forecast_panel(panel: pd.DataFrame, test_start: str,
                          order=(1, 1), dist="normal", refit_every: int = 21) -> pd.DataFrame:
     """Forecasturi GARCH walk-forward pe test, per simbol si orizont.
 
+    La fiecare refit, generam un forecast multi-pas de lungime (refit_every + max_h)
+    din care extragem zilnic valoarea corespunzatoare pozitiei in ciclul de refit.
+    Astfel forecasturile variaza zilnic (decay GARCH spre varianta neconditionata)
+    in loc sa fie constante intre refitturi (efect de treapta).
+
     Intoarce un DataFrame cu Symbol, Date si vol_garch_h<H> (volatilitate zilnica
     medie pe orizont), comparabila direct cu tinta NN.
     """
@@ -128,6 +133,8 @@ def garch_forecast_panel(panel: pd.DataFrame, test_start: str,
     test_start = pd.Timestamp(test_start)
     p, q = order
     max_h = max(config.HORIZONS)
+    # budget de forecast per refit: suficient pentru toate zilele + orizontul maxim
+    horizon_budget = refit_every + max_h
     rows = []
 
     for sym, g in panel.groupby("Symbol"):
@@ -141,26 +148,38 @@ def garch_forecast_panel(panel: pd.DataFrame, test_start: str,
         if len(test_pos) == 0 or test_pos[0] < 100:
             continue
 
-        res = None
+        last_refit_k: int | None = None
+        fc_cache: np.ndarray | None = None  # variante precomputate per ciclu
+
         for k, pos in enumerate(test_pos):
-            # re-fit periodic pe fereastra expanding pana la ziua curenta (exclusiv)
-            if res is None or k % refit_every == 0:
+            # refit periodic pe fereastra expanding
+            if last_refit_k is None or (k - last_refit_k) >= refit_every:
                 hist = ret.iloc[:pos]
                 try:
                     res = _fit(hist, p, q, dist)
+                    # forecast multi-pas: fc_cache[d] = varianta d pasi inainte
+                    # de la ultimul punct din hist (adica de la ziua de refit)
+                    fc_obj = res.forecast(horizon=horizon_budget, reindex=False)
+                    fc_cache = fc_obj.variance.values[-1]  # shape: (horizon_budget,)
+                    last_refit_k = k
                 except Exception:
-                    res = None
+                    fc_cache = None
+                    last_refit_k = k
                     continue
-            if res is None:
+
+            if fc_cache is None:
                 continue
-            try:
-                fc = res.forecast(horizon=max_h, reindex=False)
-                var_path = fc.variance.values[-1]      # (max_h,) in procente^2
-            except Exception:
+
+            # d = zile scurse de la ultimul refit (0 = ziua refitului)
+            d = k - last_refit_k
+            if d >= len(fc_cache):
                 continue
+
             row = {"Symbol": sym, "Date": ret.index[pos]}
             for h in config.HORIZONS:
-                mean_var = var_path[:h].mean() / (100.0 ** 2)
+                # media variantei pe urmatoarele h zile, plecand de la ziua d
+                end_idx = min(d + h, len(fc_cache))
+                mean_var = fc_cache[d:end_idx].mean() / (100.0 ** 2)
                 row[f"vol_garch_h{h}"] = float(np.sqrt(max(mean_var, 0.0)))
             rows.append(row)
 
