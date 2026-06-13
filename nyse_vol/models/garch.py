@@ -119,10 +119,10 @@ def garch_forecast_panel(panel: pd.DataFrame, test_start: str,
                          order=(1, 1), dist="normal", refit_every: int = 21) -> pd.DataFrame:
     """Forecasturi GARCH walk-forward pe test, per simbol si orizont.
 
-    La fiecare refit, generam un forecast multi-pas de lungime (refit_every + max_h)
-    din care extragem zilnic valoarea corespunzatoare pozitiei in ciclul de refit.
-    Astfel forecasturile variaza zilnic (decay GARCH spre varianta neconditionata)
-    in loc sa fie constante intre refitturi (efect de treapta).
+    Dupa fiecare refit, parametrii (omega, alpha, beta) sunt fixati iar varianta
+    conditionala h_t este actualizata ZILNIC cu randamentul observat:
+        h_{t+1} = omega + alpha * r_t^2 + beta * h_t
+    Astfel predictiile variaza zilnic (nu in trepte constante intre refitturi).
 
     Intoarce un DataFrame cu Symbol, Date si vol_garch_h<H> (volatilitate zilnica
     medie pe orizont), comparabila direct cu tinta NN.
@@ -130,11 +130,9 @@ def garch_forecast_panel(panel: pd.DataFrame, test_start: str,
     if not _HAS_ARCH:
         raise ImportError("Pachetul `arch` nu este instalat (pip install arch).")
 
-    test_start = pd.Timestamp(test_start)
+    test_start_ts = pd.Timestamp(test_start)
     p, q = order
     max_h = max(config.HORIZONS)
-    # budget de forecast per refit: suficient pentru toate zilele + orizontul maxim
-    horizon_budget = refit_every + max_h
     rows = []
 
     for sym, g in panel.groupby("Symbol"):
@@ -144,42 +142,78 @@ def garch_forecast_panel(panel: pd.DataFrame, test_start: str,
         if len(ret) < config.MIN_OBS_PER_SYMBOL:
             continue
 
-        test_pos = np.where(ret.index >= test_start)[0]
+        test_pos = np.where(ret.index >= test_start_ts)[0]
         if len(test_pos) == 0 or test_pos[0] < 100:
             continue
 
+        # Starea GARCH actualizata zilnic
+        omega: float | None = None
+        alpha_coeffs: list[float] = []
+        beta_coeffs:  list[float] = []
+        past_h:  list[float] = []   # q h-uri recente (newest first)
+        past_r2: list[float] = []   # p-1 r^2-uri recente (newest first)
         last_refit_k: int | None = None
-        fc_cache: np.ndarray | None = None  # variante precomputate per ciclu
 
         for k, pos in enumerate(test_pos):
-            # refit periodic pe fereastra expanding
+            # ── Refit periodic pe fereastra expanding ──
             if last_refit_k is None or (k - last_refit_k) >= refit_every:
                 hist = ret.iloc[:pos]
                 try:
                     res = _fit(hist, p, q, dist)
-                    # forecast multi-pas: fc_cache[d] = varianta d pasi inainte
-                    # de la ultimul punct din hist (adica de la ziua de refit)
-                    fc_obj = res.forecast(horizon=horizon_budget, reindex=False)
-                    fc_cache = fc_obj.variance.values[-1]  # shape: (horizon_budget,)
+                    pm = res.params
+                    omega = float(pm["omega"])
+                    alpha_coeffs = [float(pm.get(f"alpha[{i+1}]", 0.0)) for i in range(p)]
+                    beta_coeffs  = [float(pm.get(f"beta[{i+1}]",  0.0)) for i in range(q)]
+
+                    # Initializam starea din valorile fittate
+                    cv = res.conditional_volatility.values   # sigma_t shape (T,)
+                    past_h  = [float(cv[-(j+1)])**2 for j in range(min(q, len(cv)))]
+                    past_r2 = [float(ret.iloc[pos-1-j])**2 for j in range(min(p-1, pos))]
+
+                    # Avanseaza starea cu ultimul randament de antrenare
+                    # astfel incat past_h[0] = h_{pos} (nu h_{pos-1})
+                    r_adv  = float(ret.iloc[pos - 1])
+                    r2_adv = r_adv ** 2
+                    r2_in  = [r2_adv] + past_r2
+                    h_adv  = omega
+                    h_adv += sum(a * r for a, r in zip(alpha_coeffs, r2_in[:p]))
+                    h_adv += sum(b * h for b, h in zip(beta_coeffs,  past_h[:q]))
+                    past_r2 = ([r2_adv] + past_r2)[:p - 1]
+                    past_h  = ([h_adv]  + past_h )[:q]
+
                     last_refit_k = k
                 except Exception:
-                    fc_cache = None
+                    omega = None
                     last_refit_k = k
                     continue
 
-            if fc_cache is None:
+            if omega is None:
                 continue
 
-            # d = zile scurse de la ultimul refit (0 = ziua refitului)
-            d = k - last_refit_k
-            if d >= len(fc_cache):
-                continue
+            # ── Actualizare zilnica: h_{pos+1} = f(r_{pos} observat) ──
+            r_t  = float(ret.iloc[pos])
+            r2_t = r_t ** 2
+            r2_in = [r2_t] + past_r2
+            h_next = omega
+            h_next += sum(a * r for a, r in zip(alpha_coeffs, r2_in[:p]))
+            h_next += sum(b * h for b, h in zip(beta_coeffs,  past_h[:q]))
 
+            # Stare pentru ziua urmatoare
+            past_r2 = ([r2_t] + past_r2)[:p - 1]
+            past_h  = ([h_next] + past_h )[:q]
+
+            # ── Forecast multi-pas din h_{pos+1} ──
+            # h_{t+j} = omega + (sum_alpha + sum_beta) * h_{t+j-1}  (j >= 2)
+            alpha_s = sum(alpha_coeffs)
+            beta_s  = sum(beta_coeffs)
+            forecast_h: list[float] = [h_next]
+            for _ in range(1, max_h):
+                forecast_h.append(omega + (alpha_s + beta_s) * forecast_h[-1])
+
+            # ── Volatilitate medie per orizont (din variante la scara %) ──
             row = {"Symbol": sym, "Date": ret.index[pos]}
             for h in config.HORIZONS:
-                # media variantei pe urmatoarele h zile, plecand de la ziua d
-                end_idx = min(d + h, len(fc_cache))
-                mean_var = fc_cache[d:end_idx].mean() / (100.0 ** 2)
+                mean_var = float(np.mean(forecast_h[:h])) / (100.0 ** 2)
                 row[f"vol_garch_h{h}"] = float(np.sqrt(max(mean_var, 0.0)))
             rows.append(row)
 
