@@ -1,4 +1,4 @@
-"""Utilitare comune pentru scripturi: seed, cache pentru date procesate."""
+"""Utilitare comune pentru scripturi: seed, cache pentru date procesate, banner."""
 from __future__ import annotations
 
 import logging
@@ -17,6 +17,20 @@ from nyse_vol.data import features as feat_mod  # noqa: E402
 from nyse_vol.data import loader as loader_mod  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+_SEP = "=" * 64
+
+
+def print_banner(step: int, total: int, title: str, lines: list | None = None) -> None:
+    """Afiseaza un banner vizibil in consola pentru un pas al pipeline-ului."""
+    print(f"\n{_SEP}")
+    print(f"  PAS {step}/{total} — {title}")
+    if lines:
+        print(f"  {'-' * 60}")
+        for line in lines:
+            print(f"  {line}")
+    print(f"{_SEP}\n")
+
 
 FEATURES_CACHE = config.PROCESSED_DIR / "features.pkl"
 PANEL_CACHE = config.PROCESSED_DIR / "panel.pkl"

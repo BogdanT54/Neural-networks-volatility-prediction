@@ -13,11 +13,12 @@ from __future__ import annotations
 import random
 from dataclasses import replace
 
+import numpy as np
 import pandas as pd
 
 from nyse_vol import config
 from nyse_vol.config import ModelConfig, TrainConfig
-from nyse_vol.train.trainer import train_model
+from nyse_vol.train.trainer import predict, train_model
 
 
 def sample_config(rng: random.Random):
@@ -38,6 +39,25 @@ def sample_config(rng: random.Random):
     return model_cfg, train_cfg
 
 
+def _val_metrics_h1(model, splits, make_loaders, device):
+    """Calculeaza RMSE si MAE pe val pentru orizontul h=1, in scara originala."""
+    from nyse_vol.data.dataset import inverse_target
+    _, val_loader, _ = make_loaders(splits)
+    pred_std = predict(model, val_loader, device)
+    pred_log = inverse_target(pred_std, splits)
+    pred_vol = np.exp(pred_log[:, 0])
+
+    true_log = inverse_target(splits.y_val.numpy(), splits)
+    true_vol = np.exp(true_log[:, 0])
+
+    mask = np.isfinite(true_vol) & np.isfinite(pred_vol)
+    if mask.sum() == 0:
+        return float("nan"), float("nan")
+    rmse = float(np.sqrt(np.mean((true_vol[mask] - pred_vol[mask]) ** 2)))
+    mae = float(np.mean(np.abs(true_vol[mask] - pred_vol[mask])))
+    return rmse, mae
+
+
 def random_search(model_factory, splits, make_loaders, n_trials: int = 10,
                   epochs: int = 15, device: str = "cpu", seed: int = 42,
                   log_path=None) -> pd.DataFrame:
@@ -49,19 +69,33 @@ def random_search(model_factory, splits, make_loaders, n_trials: int = 10,
     n_features = splits.X_train.shape[-1]
     n_outputs = splits.y_train.shape[-1]
     results = []
+    print_every = max(1, epochs // 3)
 
     for trial in range(n_trials):
         model_cfg, train_cfg = sample_config(rng)
         train_cfg = replace(train_cfg, epochs=epochs)
         train_loader, val_loader, _ = make_loaders(splits, train_cfg.batch_size)
         model = model_factory(n_features, n_outputs, model_cfg)
-        print(f"[trial {trial + 1}/{n_trials}] {model_cfg} | "
-              f"opt={train_cfg.optimizer} lr={train_cfg.lr} wd={train_cfg.weight_decay}")
+
+        bidir_str = "bidir" if model_cfg.bidirectional else "unidir"
+        print(f"\n[Trial {trial + 1}/{n_trials}] "
+              f"hidden={model_cfg.hidden_size} | layers={model_cfg.num_layers} | "
+              f"dropout={model_cfg.dropout} | {bidir_str} | "
+              f"act={model_cfg.head_activation} | "
+              f"opt={train_cfg.optimizer} | lr={train_cfg.lr}")
+
         _, history = train_model(model, train_loader, val_loader, train_cfg,
-                                 device=device, verbose=False)
+                                 device=device, verbose=True, print_every=print_every)
+
+        val_rmse, val_mae = _val_metrics_h1(model, splits, make_loaders, device)
+        print(f"  → best_val={history['best_val']:.4f} | "
+              f"RMSE_val(h=1)={val_rmse:.5f} | MAE_val(h=1)={val_mae:.5f}")
+
         row = {
             "trial": trial + 1,
             "best_val": history["best_val"],
+            "rmse_val_h1": val_rmse,
+            "mae_val_h1": val_mae,
             "hidden_size": model_cfg.hidden_size,
             "num_layers": model_cfg.num_layers,
             "dropout": model_cfg.dropout,
@@ -73,7 +107,6 @@ def random_search(model_factory, splits, make_loaders, n_trials: int = 10,
             "weight_decay": train_cfg.weight_decay,
         }
         results.append(row)
-        print(f"    -> best_val={history['best_val']:.4f}")
 
     df = pd.DataFrame(results).sort_values("best_val").reset_index(drop=True)
     if log_path is not None:

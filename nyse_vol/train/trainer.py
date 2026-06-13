@@ -49,8 +49,11 @@ def predict(model, loader, device) -> np.ndarray:
 
 
 def train_model(model, train_loader, val_loader, cfg: TrainConfig | None = None,
-                device: str = "cpu", verbose: bool = True):
-    """Antreneaza modelul si intoarce (model, history) cu cel mai bun checkpoint."""
+                device: str = "cpu", verbose: bool = True, print_every: int = 1):
+    """Antreneaza modelul si intoarce (model, history) cu cel mai bun checkpoint.
+
+    print_every: afiseaza progresul la fiecare N epoci (relevant in HPO).
+    """
     cfg = cfg or TrainConfig()
     model.to(device)
     loss_fn = nn.MSELoss()
@@ -91,9 +94,10 @@ def train_model(model, train_loader, val_loader, cfg: TrainConfig | None = None,
         else:
             patience += 1
 
-        if verbose:
-            print(f"  epoch {epoch + 1:02d}/{cfg.epochs} "
-                  f"train={train_loss:.4f} val={val_loss:.4f} best={best_val:.4f}")
+        if verbose and (epoch + 1) % print_every == 0:
+            marker = " ← best" if patience == 0 else ""
+            print(f"  epoca {epoch + 1:02d}/{cfg.epochs} "
+                  f"train={train_loss:.4f}  val={val_loss:.4f}  best={best_val:.4f}{marker}")
 
         if patience >= cfg.early_stop_patience:
             if verbose:

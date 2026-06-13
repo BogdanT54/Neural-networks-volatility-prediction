@@ -9,7 +9,7 @@ import argparse
 import logging
 import sys
 
-from _common import config, get_features, get_panel, set_seed
+from _common import config, get_features, get_panel, print_banner, set_seed
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -20,13 +20,96 @@ def setup_logging(verbose: bool = False) -> None:
         level=level,
         format=fmt,
         datefmt=datefmt,
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-        ],
+        handlers=[logging.StreamHandler(sys.stdout)],
     )
-    # reducere zgomot de la biblioteci externe
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
+
+
+def _print_csv_schema():
+    sep = "-" * 62
+    print(f"\n{sep}")
+    print("  STRUCTURA FISIERELOR CSV EXPORTATE")
+    print(sep)
+    print("""
+  panel_preprocessed.csv
+  ───────────────────────────────────────────────────────────
+  Un rand = o zi de tranzactionare per simbol.
+  Coloane:
+    Symbol  : ticker-ul actiunii (ex: "JPM", "GS", "BAC")
+    Date    : data (YYYY-MM-DD)
+    Open    : pretul la deschiderea zilei
+    High    : pretul maxim intraday
+    Low     : pretul minim intraday
+    Close   : pretul la inchidere
+    Volume  : numarul de actiuni tranzactionate
+
+  features_all.csv
+  ───────────────────────────────────────────────────────────
+  Un rand = o zi per simbol (dupa eliminarea NaN-urilor).
+  Contine toate coloanele de mai sus PLUS:
+
+  FEATURES — intrarile pentru modelele neuronale (9 total):
+    log_ret            : log(Close_azi / Close_ieri)
+                         Randamentul zilnic in scara logaritmica.
+                         Stabil si stationar (vs. pretul brut).
+
+    log_range          : log(High / Low)
+                         Amplitudinea intraday. Cu cat e mai mare,
+                         cu atat piata a fost mai volatila in ziua
+                         respectiva.
+
+    log_volume         : log(Volume)
+                         Volumul comprimat logaritmic. Volumul mare
+                         precede adesea miscari mari de pret.
+
+    vol_parkinson      : sqrt(1/(4*ln2) * log(H/L)^2)
+                         Estimator de volatilitate care foloseste
+                         doar High si Low. Eficient, dar ignora
+                         directia si gap-urile overnight.
+
+    vol_garman_klass   : formula OHLC (Open, High, Low, Close)
+                         Cel mai precis estimator range-based.
+                         Folosit si ca TINTA principala a modelului.
+
+    vol_rogers_satchell: formula OHLC robusta la drift si gap-uri
+                         Utila pentru actiuni cu gap-uri overnight
+                         frecvente.
+
+    vol_close_to_close : sqrt(log_ret^2) = |log_ret|
+                         Estimator simplu bazat doar pe randamentul
+                         zilnic. Cel mai zgomotos, dar usor de
+                         calculat.
+
+    dow_sin / dow_cos  : sin(2*pi*DOW/5) si cos(2*pi*DOW/5)
+                         Ziua saptamanii (0=Luni, 4=Vineri) codata
+                         ciclic. Modelul invata efecte de calendar
+                         (ex: volatilitate mai mare Luni dimineata).
+
+  TINTE — ce prezice modelul (4 orizonturi):
+    target_h1  : volatilitatea medie realizata in ziua urmatoare
+    target_h5  : volatilitatea medie realizata in urm. 5 zile
+    target_h10 : volatilitatea medie realizata in urm. 10 zile
+    target_h20 : volatilitatea medie realizata in urm. 20 zile
+
+    Toate tintele sunt in SCALA LOGARITMICA (log-volatilitate).
+    Motivul: distributia log-volatilitatii e aproape normala,
+    ceea ce face antrenarea mai stabila numeric.
+    La evaluare, convertim inapoi cu exp() la scala originala.
+
+  features_sample_per_symbol.csv
+  ───────────────────────────────────────────────────────────
+  Primele si ultimele 5 randuri din fiecare simbol.
+  Util pentru a verifica rapid efectul forward-fill la capetele
+  seriei si ca datele arata corect.
+
+  features_stats_per_symbol.csv
+  ───────────────────────────────────────────────────────────
+  Statistici descriptive (medie, std, min, max, quartile)
+  per simbol pentru toate features si tintele.
+  Util pentru a detecta simboluri cu distributii anormale.
+""")
+    print(sep)
 
 
 def _export_csv(panel, feats, out_dir, log) -> None:
@@ -36,18 +119,14 @@ def _export_csv(panel, feats, out_dir, log) -> None:
     export_dir = out_dir / "export"
     export_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Panel complet dupa curatare + ffill
     panel_path = export_dir / "panel_preprocessed.csv"
     panel.to_csv(panel_path, index=False, date_format="%Y-%m-%d")
     log.info("  Exportat: %s (%d randuri)", panel_path.name, len(panel))
 
-    # 2. Features complete (toate simbolurile)
     feats_path = export_dir / "features_all.csv"
     feats.to_csv(feats_path, index=False, date_format="%Y-%m-%d", float_format="%.6f")
     log.info("  Exportat: %s (%d randuri)", feats_path.name, len(feats))
 
-    # 3. Sample per simbol: primele si ultimele 5 randuri din fiecare simbol,
-    #    util pentru a vedea rapid efectul ffill la capetele seriei
     sample_parts = []
     for sym, g in feats.groupby("Symbol"):
         sample_parts.append(g.head(5))
@@ -58,7 +137,6 @@ def _export_csv(panel, feats, out_dir, log) -> None:
     sample.to_csv(sample_path, index=False, date_format="%Y-%m-%d", float_format="%.6f")
     log.info("  Exportat: %s (%d randuri, cap+coada per simbol)", sample_path.name, len(sample))
 
-    # 4. Statistici descriptive per simbol
     from nyse_vol.data.features import FEATURE_COLS, TARGET_COLS
     stats = feats.groupby("Symbol")[FEATURE_COLS + TARGET_COLS].describe().round(4)
     stats_path = export_dir / "features_stats_per_symbol.csv"
@@ -66,6 +144,7 @@ def _export_csv(panel, feats, out_dir, log) -> None:
     log.info("  Exportat: %s (statistici descriptive per simbol)", stats_path.name)
 
     log.info("Toate fisierele exportate in: %s", export_dir)
+    _print_csv_schema()
 
 
 def main():
@@ -79,11 +158,26 @@ def main():
     setup_logging(verbose=args.verbose)
     log = logging.getLogger(__name__)
 
+    print_banner(1, 6, "PREPROCESARE DATE NYSE 2001–2026", [
+        "Ce face:",
+        "  1. Incarca datele brute NYSE din fisiere ZIP (an cu an)",
+        "  2. Curata datele: elimina preturi invalide, zile nelichide",
+        "  3. Reindexeaza la calendarul bursier + forward-fill (max 3 zile)",
+        "  4. Calculeaza 9 features tehnice per simbol per zi",
+        "  5. Calculeaza tintele de volatilitate pentru h=1,5,10,20 zile",
+        "  6. Salveaza cache-ul pentru pasi urmatori",
+        "",
+        "Rezultat: artifacts/processed/panel.pkl + features.pkl",
+        "Urmator:  python 02_train_garch.py  (baseline GARCH)",
+    ])
+
     set_seed()
     log.info("DATA_DIR = %s", config.DATA_DIR)
     log.info("PROCESSED_DIR = %s", config.PROCESSED_DIR)
     log.info("Estimator tinta: %s | Orizonturi: %s",
              config.TARGET_ESTIMATOR, config.HORIZONS)
+    log.info("Split: Train <= %s | Val <= %s | Test > %s",
+             config.TRAIN_END, config.VAL_END, config.VAL_END)
 
     log.info("--- Pasul 1/2: Incarcare panel ---")
     panel = get_panel(force=args.force)
