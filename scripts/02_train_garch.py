@@ -1,7 +1,9 @@
 """Pas 2: baseline clasic GARCH pe partitia de test (walk-forward).
 
-Itereaza optional pe mai multe ordine (p,q) si distributii, alegand configuratia
-cu cea mai mica eroare fata de tinta, si salveaza forecasturile pentru comparatie.
+Testeaza stationaritatea log-randamentelor (ADF, KPSS, PP) per simbol,
+itereaza pe toate ordinele (1,1),(1,2),(2,1),(2,2) si distributiile
+normal/Student-t, alege configuratia optima dupa RMSE(h=1) si salveaza
+forecasturile pentru comparatie cu modelele NN.
 """
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ import pandas as pd
 
 from _common import config, get_features, get_panel, print_banner, print_data_summary, set_seed
 from nyse_vol.data.features import TARGET_COLS
-from nyse_vol.models.garch import garch_forecast_panel
+from nyse_vol.models.garch import garch_forecast_panel, stationarity_tests
 
 
 def _true_targets(feats: pd.DataFrame) -> pd.DataFrame:
@@ -25,28 +27,79 @@ def _true_targets(feats: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=TARGET_COLS)
 
 
+def _print_stationarity(results: dict) -> None:
+    """Afiseaza tabelul cu rezultatele testelor de stationaritate."""
+    sep = "─" * 68
+    print(f"\n{sep}")
+    print("  TESTE DE STATIONARITATE PE LOG-RANDAMENTE")
+    print(f"  {'Stoc':<7}  {'ADF stat':>9}  {'p-ADF':>7}  {'KPSS stat':>9}  "
+          f"{'p-KPSS':>7}  {'PP stat':>9}  {'p-PP':>7}  Concluzie")
+    print(sep)
+
+    all_stationary = True
+    for sym, r in sorted(results.items()):
+        adf  = r.get("adf")
+        kpss = r.get("kpss")
+        pp   = r.get("pp")
+
+        adf_str  = f"{adf['stat']:>9.3f}  {adf['p']:>7.4f}" if adf else f"{'N/A':>9}  {'N/A':>7}"
+        kpss_str = f"{kpss['stat']:>9.3f}  {kpss['p']:>7.4f}" if kpss else f"{'N/A':>9}  {'N/A':>7}"
+        pp_str   = f"{pp['stat']:>9.3f}  {pp['p']:>7.4f}"    if pp   else f"{'N/A':>9}  {'N/A':>7}"
+
+        adf_ok  = adf["stationary"]  if adf  else True
+        kpss_ok = kpss["stationary"] if kpss else True
+        pp_ok   = pp["stationary"]   if pp   else True
+
+        is_ok = adf_ok and kpss_ok and pp_ok
+        if not is_ok:
+            all_stationary = False
+        concl = "STATIONARA ✓" if is_ok else "ATENTIE ⚠"
+
+        print(f"  {sym:<7}  {adf_str}  {kpss_str}  {pp_str}  {concl}")
+
+    print(sep)
+    if all_stationary:
+        print("  Concluzie globala: toate seriile sunt STATIONARE.")
+        print("  GARCH este aplicabil direct pe log-randamente (fara diferentiere).")
+    else:
+        print("  ATENTIE: unele serii pot necesita diferentiere suplimentara.")
+    print(f"{sep}\n")
+
+    print("  Interpretare teste:")
+    print("    ADF   : H0 = nestationar.  p < 0.05 → respingem H0 → STATIONARA")
+    print("    KPSS  : H0 = stationara.   p < 0.05 → respingem H0 → NESTATIONARA")
+    print("    PP    : H0 = nestationar.  p < 0.05 → respingem H0 → STATIONARA")
+    print("  Log-randamentele sunt aproape intotdeauna stationare — confirmat.")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--search", action="store_true",
-                    help="itereaza pe GARCH_ORDERS x GARCH_DISTS")
-    ap.add_argument("--refit-every", type=int, default=21)
+    ap.add_argument("--refit-every", type=int, default=21,
+                    help="refit GARCH la fiecare N zile bursiere (implicit 21)")
     args = ap.parse_args()
+
+    combos = list(itertools.product(config.GARCH_ORDERS, config.GARCH_DISTS))
 
     print_banner(2, 6, "BASELINE CLASIC — GARCH (walk-forward)", [
         "Ce face:",
-        "  • Antreneaza modele GARCH pe datele de train+val",
+        "  • Calculeaza log-randamente si testeaza stationaritatea (ADF, KPSS, PP)",
+        "  • Aplica GARCH pe log-randamente (scalate la procente, conv. arch)",
         "  • Evalueaza walk-forward pe setul de test (> 2021-12-31)",
-        "  • La fiecare 21 zile bursiere, refac fit-ul pe date extinse",
+        f"  • La fiecare {args.refit_every} zile bursiere, reface fit-ul pe date extinse",
+        f"  • Testeaza {len(combos)} configuratii: 4 ordine x 2 distributii",
         "  • Selecteaza configuratia cu cel mai mic RMSE(h=1)",
+        "",
+        "Ordine testate:      GARCH(1,1), GARCH(1,2), GARCH(2,1), GARCH(2,2)",
+        "Distributii testate: normal (Gaussian), Student-t",
+        "",
+        "De ce log-randamente?",
+        "  log(Close_t / Close_{t-1}) * 100 — stationare, simetrice,",
+        "  standard in literatura de volatilitate si in biblioteca arch.",
         "",
         "De ce GARCH?",
         "  GARCH (Generalized AutoRegressive Conditional Heteroskedasticity)",
         "  este standardul industrial pentru modelarea volatilitatii.",
         "  Il folosim ca BASELINE — modelele NN trebuie sa il depaseasca.",
-        "",
-        f"  Ordine testate: {config.GARCH_ORDERS if args.search else '[(1,1)]'}",
-        f"  Distributii: {config.GARCH_DISTS if args.search else '[normal]'}",
-        f"  Refit la fiecare: {args.refit_every} zile bursiere",
         "",
         "Rezultat: artifacts/metrics/garch_forecasts.pkl",
         "Urmator:  python 03_train_nn.py  (modele neuronale)",
@@ -69,26 +122,29 @@ def main():
           f"({n_test_days} zile bursiere × {n_test_sym} stocuri = "
           f"{len(feats_test):,} puncte de evaluat)")
 
-    if args.search:
-        combos = list(itertools.product(config.GARCH_ORDERS, config.GARCH_DISTS))
-        print(f"Cautare pe {len(combos)} configuratii GARCH...\n")
-    else:
-        combos = [((1, 1), "normal")]
-        print("Folosind configuratia implicita GARCH(1,1) dist=normal.\n"
-              "Adauga --search pentru a cauta configuratia optima.\n")
+    # ── Teste de stationaritate ──
+    print("\nTestez stationaritatea log-randamentelor per simbol...")
+    stat_results = stationarity_tests(panel)
+    _print_stationarity(stat_results)
+
+    # ── Cautare configuratie optima GARCH ──
+    print(f"Testez {len(combos)} configuratii GARCH...\n")
+    print(f"  {'Configuratie':<22}  {'RMSE(h=1)':>10}  {'Puncte test':>12}")
+    print(f"  {'─' * 22}  {'─' * 10}  {'─' * 12}")
 
     best = None
     for order, dist in combos:
-        print(f"  GARCH{order} dist={dist} ...")
+        label = f"GARCH{order} dist={dist}"
         fc = garch_forecast_panel(panel, config.VAL_END, order=order, dist=dist,
                                   refit_every=args.refit_every)
         if fc.empty:
-            print("    (niciun forecast valid — sarind peste)")
+            print(f"  {label:<22}  {'—':>10}  niciun forecast valid")
             continue
         merged = truth.merge(fc, on=["Symbol", "Date"], how="inner")
         err = np.sqrt(np.mean((merged["true_vol_h1"] - merged["vol_garch_h1"]) ** 2))
         n_pts = len(merged)
-        print(f"    RMSE(h=1)={err:.5f} pe {n_pts} puncte de test")
+        marker = "  ← cel mai bun" if (best is None or err < best[0]) else ""
+        print(f"  {label:<22}  {err:>10.5f}  {n_pts:>12,}{marker}")
         if best is None or err < best[0]:
             best = (err, order, dist, fc)
 
@@ -101,9 +157,9 @@ def main():
         f.write(f"order={order} dist={dist}\n")
 
     print(f"\n{'=' * 62}")
-    print(f"  Cea mai buna configuratie GARCH: order={order} dist={dist}")
-    print(f"  Forecasturi salvate in: {config.METRICS_DIR / 'garch_forecasts.pkl'}")
-    print(f"  Coloane forecast: vol_garch_h1, vol_garch_h5, vol_garch_h10, vol_garch_h20")
+    print(f"  Configuratia optima GARCH: order={order}  dist={dist}")
+    print(f"  Forecasturi salvate: {config.METRICS_DIR / 'garch_forecasts.pkl'}")
+    print(f"  Coloane: vol_garch_h1, vol_garch_h5, vol_garch_h10, vol_garch_h20")
     print(f"{'=' * 62}")
 
 

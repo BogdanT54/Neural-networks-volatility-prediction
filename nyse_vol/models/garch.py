@@ -27,6 +27,86 @@ except Exception:                       # pragma: no cover
     _HAS_ARCH = False
 
 
+# --------------------------------------------------------------------------- #
+# Teste de stationaritate
+# --------------------------------------------------------------------------- #
+
+def stationarity_tests(panel: pd.DataFrame) -> dict[str, dict]:
+    """Ruleaza ADF, KPSS si Phillips-Perron pe log-randamentele din panel.
+
+    Parametri
+    ---------
+    panel : DataFrame Silver cu coloanele Symbol, Date, Close.
+
+    Returneaza
+    ----------
+    dict  {simbol -> {adf, kpss, pp}} cu statisticile si p-valorile.
+
+    Note
+    ----
+    ADF  : H0 = nestationar (radacina unitara). p < 0.05 → stationara.
+    KPSS : H0 = stationara.                     p < 0.05 → nestationara.
+    PP   : H0 = nestationar (ca ADF, mai robust). p < 0.05 → stationara.
+    Log-randamentele sunt aproape intotdeauna stationare; testele confirma
+    ca GARCH este aplicabil fara diferentiere suplimentara.
+    """
+    try:
+        from statsmodels.tsa.stattools import adfuller
+        from statsmodels.tsa.stattools import kpss as _kpss
+        _HAS_STATSMODELS = True
+    except ImportError:
+        _HAS_STATSMODELS = False
+
+    results: dict[str, dict] = {}
+
+    for sym, g in panel.groupby("Symbol"):
+        g = g.sort_values("Date")
+        ret = (np.log(g["Close"] / g["Close"].shift(1)).dropna() * 100.0)
+        if len(ret) < 50:
+            continue
+
+        r: dict = {}
+
+        if _HAS_STATSMODELS:
+            # ADF
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                adf_stat, adf_p, _, _, _, _ = adfuller(ret, autolag="AIC")
+            r["adf"] = {
+                "stat": float(adf_stat),
+                "p": float(adf_p),
+                "stationary": bool(adf_p < 0.05),
+            }
+
+            # KPSS
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                k_stat, k_p, _, _ = _kpss(ret, regression="c", nlags="auto")
+            r["kpss"] = {
+                "stat": float(k_stat),
+                "p": float(k_p),
+                "stationary": bool(k_p >= 0.05),
+            }
+        else:
+            r["adf"] = r["kpss"] = None
+
+        # Phillips-Perron (din arch)
+        try:
+            from arch.unitroot import PhillipsPerron
+            pp = PhillipsPerron(ret)
+            r["pp"] = {
+                "stat": float(pp.stat),
+                "p": float(pp.pvalue),
+                "stationary": bool(pp.pvalue < 0.05),
+            }
+        except Exception:
+            r["pp"] = None
+
+        results[sym] = r
+
+    return results
+
+
 def _fit(returns_pct: pd.Series, p, q, dist):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
