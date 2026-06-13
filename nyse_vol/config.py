@@ -34,13 +34,18 @@ for _d in (ARTIFACTS_DIR, PROCESSED_DIR, MODELS_DIR, PLOTS_DIR, METRICS_DIR):
 # Universul de simboluri (cos de actiuni lichide)
 # --------------------------------------------------------------------------- #
 # Simboluri lichide, prezente pe NYSE inca din 2001, folosite pentru modelul
-# global. Lista poate fi inlocuita cu o selectie automata dupa volum (vezi
-# data/loader.py: select_liquid_symbols).
-SYMBOLS = [
+# global. Poate fi suprascris din variabila de mediu SYMBOLS (virgula-separat).
+# Exemplu: export SYMBOLS="JPM,GS,BAC,C,AXP"
+_ALL_SYMBOLS = [
     "AA", "ABT", "AEE", "AEP", "AES", "AFL", "AIG", "AXP", "BA", "BAC",
     "C", "CAT", "CL", "CVX", "DD", "DIS", "DOW", "DUK", "EMR", "F",
     "GE", "GS", "HD", "IBM", "JNJ", "JPM", "KO", "MCD", "MMM", "MO",
 ]
+_symbols_env = os.environ.get("SYMBOLS", "").strip()
+SYMBOLS = (
+    [s.strip().upper() for s in _symbols_env.split(",") if s.strip()]
+    if _symbols_env else _ALL_SYMBOLS
+)
 
 # --------------------------------------------------------------------------- #
 # Parametrii seriei de timp
